@@ -13,3 +13,24 @@ Commercial Terms of Service: https://www.anthropic.com/legal/commercial-terms
 
 Third-party dependencies are listed in package.json files and are subject
 to their respective licenses.
+
+---
+
+MODIFICATIONS
+
+This distribution is a derivative of Craft Agents, an open-source project by
+Craft Docs Ltd. (https://github.com/craft-ai-agents/craft-agents-oss), used
+under the Apache License 2.0. The copyright notices above are retained in full.
+
+The following addition was made on top of the upstream project and is NOT
+authored by Craft Docs Ltd.:
+
+  packages/course-content-workbench/
+
+      A business layer adapting the base for course-content operations.
+      It contains a declarative AI-capability registry, deterministic
+      chapter aggregation with rule fallback for long-running tasks,
+      per-task artifact isolation, and account freeze / access revocation.
+
+That directory carries zero third-party dependencies and modifies no upstream
+file. Everything outside it is upstream code, unmodified.

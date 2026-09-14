@@ -7,6 +7,14 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](CODE_OF_CONDUCT.md)
 
+> ## ⚠️ This repository is a derivative work
+>
+> This is a **fork-with-additions** of [`craft-ai-agents/craft-agents-oss`](https://github.com/craft-ai-agents/craft-agents-oss) (Apache-2.0, Copyright 2026 Craft Docs Ltd.). All credit for the base belongs to Craft Docs Ltd. — everything below is built **on top of**, not *instead of*, their work. See [`NOTICE`](NOTICE) for the statement of modifications.
+>
+> **What was added here:** [`packages/course-content-workbench/`](packages/course-content-workbench/README.md) — a business layer that turns the base into a course-content AI productivity workbench (declarative AI-capability registry, deterministic chapter aggregation with rule fallback, per-task artifact isolation, account freeze / access revocation). It has **zero third-party dependencies** and **modifies no upstream file**. Upstream is left byte-for-byte identical, so keeping in sync is a plain `git fetch && git merge`.
+
+---
+
 ## How it Works (Video)
 To understand what Craft Agents does and how it works watch this video.
 
