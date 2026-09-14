@@ -111,6 +111,14 @@ export class CapabilityRegistry {
     return this.entries.has(id);
   }
 
+  /** Reverse lookup for transports that address capabilities by tool name. */
+  idForToolName(toolName: string): CapabilityId | null {
+    for (const entry of this.entries.values()) {
+      if (entry.toolName === toolName) return entry.id;
+    }
+    return null;
+  }
+
   listToolDefinitions(): ToolDefinition[] {
     return [...this.entries.values()].map((e) => ({
       name: e.toolName,

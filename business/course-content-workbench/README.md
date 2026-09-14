@@ -17,7 +17,9 @@
 | **素材与任务的业务对象隔离** | **本目录新增（复用底座 Session/Workspace 模型）** |
 | **账号管理与三层访问撤销** | **本目录新增（自研业务层）** |
 
-改造采取**纯增量**方式：新增一个独立目录、**零外部依赖**、不触碰 `bun.lock`，也不修改底座任何一行代码。这既是"不改动 Agent 执行核心"的证据，也让 `git log` 里业务提交与上游提交泾渭分明。
+改造采取**纯增量**方式：新增一个独立目录、不触碰 `bun.lock`、不修改底座任何一行代码。这既是"不改动 Agent 执行核心"的证据，也让 `git log` 里业务提交与上游提交泾渭分明。
+
+它对底座的依赖是**一个运行时依赖**（`@modelcontextprotocol/sdk`，与底座自己用的是同一个版本），仅用于 `adapter/` 的传输层；`src/` 下的业务逻辑保持零依赖，可以脱离任何传输独立测试。
 
 之所以放在仓库根的 `business/` 而不是 `packages/` 下，是有意的：根 `package.json` 的 `workspaces` 是 `packages/*` 与 `apps/*`，而 CI 跑的是 `bun install --frozen-lockfile`。塞进 `packages/` 会让 lockfile 少一条 workspace 记录，**CI 直接失败**。放在 `business/` 下则完全不进依赖图，上游锁文件保持逐字节一致。
 
@@ -34,6 +36,11 @@
 | `src/account-revocation.ts` | 凭据层 / 连接层 / 执行层三层访问撤销 | 冻结立即生效 |
 | `src/business-events.ts` | 长任务进度与错误的结构化事件 | 错误态可驱动前端恢复 |
 | `src/remote.ts` | 第三方服务调用；**配置缺失即失败，不静默兜底** | 外部服务接入 |
+| `adapter/session-context-bridge.ts` | 把底座 `SessionToolContext` 适配成业务层的 `ToolContext`（含凭据解析） | 与底座的接线 |
+| `adapter/agent-events.ts` | 业务事件 → 底座事件词汇，同一套成员名 | 与底座的接线 |
+| `adapter/mcp-tools.ts` | MCP `tools/list` 与 `tools/call` 的纯函数实现 | 进程外暴露 |
+| `adapter/mcp-server.ts` | stdio MCP 服务；骨架与底座自带 `session-mcp-server` 一致 | 进程外暴露 |
+| `adapter/upstream-contract.test.ts` | **守卫测试**：直接读上游源码，底座改字段名就报红 | 防止静默漂移 |
 
 ---
 
@@ -84,32 +91,41 @@ const result = await buildChapters(segments, { groupByModel, pageHints, timeoutM
 ## 五、运行
 
 ```bash
-cd packages/course-content-workbench
-```bash
 cd business/course-content-workbench
+npm install
 npm test          # 需要 Node >= 22.6，直接用内置 type stripping 跑 .ts
 ```
 
-38 个测试，覆盖：登记表的增删改查与入参校验、五种降级路径的行为、路径穿越防护、三层撤销各自的独立性与组合顺序。
+64 个测试，覆盖：登记表的增删改查与入参校验、五种降级路径的行为、路径穿越防护、三层撤销各自的独立性与组合顺序、MCP 请求处理、以及上游契约守卫。
 
-> 不需要 `bun install`。这个包**零外部依赖**，刻意不动底座的依赖图与 `bun.lock`。
+**手动冒烟**（真起一个 stdio 服务）：
+
+```bash
+npm run serve:mcp -- --session-id demo-1 --workspace-root /tmp/ws
+# 另开一个终端，或用任意 MCP 客户端发起 initialize → tools/list → tools/call
+```
+
+已验证：`tools/list` 返回五个能力；`tools/call` 能正确路由，且上游不可达时返回 `isError` 结果而不是把服务搞崩。
+
+> 不需要 `bun install`。这个包自己 `npm install` 即可，刻意不进底座的依赖图，也不动 `bun.lock`。
 
 ---
 
-## 六、当前集成程度（诚实说明）
+## 六、接线是怎么做的（以及为什么这么做）
 
-这一层目前是 **side-car（旁挂）状态**，不是"装进去就能用"：
+底座的 session tools 是一个**写死的常量数组**（`SESSION_TOOL_DEFS`），**不是开放扩展点**。所以"把能力注册进去"这条路意味着改上游代码——与纯增量原则直接冲突，也不在我们选定的 R 点范围内。
 
-| | 状态 |
+真正对应简历那条 bullet 的做法是 **MCP**：同一份工具实现，进程内直接调用，进程外经 MCP 暴露。这正是 `capabilities.ts` 里 `transport: 'in-process' | 'mcp'` 两个取值的由来。
+
+| | 做法 |
 | --- | --- |
-| 业务逻辑本身 | ✅ 完整实现，38 个测试通过，strict 类型检查通过 |
-| 与底座的**类型耦合** | ⚠️ `src/ports.ts` 是自己定义的窄接口，形状照着底座的 `SessionToolContext` / `AgentEvent` 写，**但没有 `import '@craft-agent/*'`** |
-| 与底座的**运行期接线** | ⚠️ 还没有注册模块把这五个能力挂到 session tool registry 上 |
-| 独立运行 | ✅ 可以单独跑测试，不依赖底座启动 |
+| 进程外 | `adapter/mcp-server.ts` 起一个 stdio MCP 服务，骨架照抄底座自带的 `packages/session-mcp-server`：同样的 `@modelcontextprotocol/sdk`、同样的 `tools/list` + `tools/call`、同样的 `__CALLBACK__` stderr 约定 |
+| 进程内 | `adapter/session-context-bridge.ts` 把底座 `SessionToolContext` 适配成业务层的 `ToolContext`，凭据按占位名解析 |
+| 事件 | `adapter/agent-events.ts` 让业务事件复用底座事件词汇的成员名，不再造第二套 |
 
-**为什么先这样**：放进 `packages/*` 会污染 `bun.lock`（见第一节），而真正接线需要依赖底座类型、必须 install 之后才能验证。在 install 之前写接线，等于写没验证过的代码。
+**为什么是结构化类型而不是 `import '@craft-agent/*'`**：底座没有把 `@craft-agent/session-tools-core` 作为可被外部包消费的入口暴露出来，硬依赖会把这个目录拖回 workspace 依赖图（也就是拖回 `bun.lock`）。结构化类型让这一层对任何"形状正确"的上下文都能工作。
 
-**还差的一步**（很短）：补一个 `adapter/` 目录，做两件事——把底座真实的 `SessionToolContext` 适配成这里的 `ToolContext`，以及把这五个能力注册进 session tool registry 并把 `WorkbenchEvent` 转成 `AgentEvent`。这一步需要在装好依赖的环境里写和测试。
+**这个选择的代价是漂移风险**——底座把 `workspacePath` 改个名，代码照样编译，只是静默拿到 `undefined`。所以有 `adapter/upstream-contract.test.ts`：它直接读上游的 `context.ts` 和 `message.ts` 源码文本，断言我们依赖的成员还在。**底座一改，这里先红。**
 
 ---
 

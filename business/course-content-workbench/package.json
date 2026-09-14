@@ -7,11 +7,16 @@
   "type": "module",
   "exports": "./src/index.ts",
   "scripts": {
-    "test": "node --test \"src/**/*.test.ts\""
+    "test": "node --test \"src/**/*.test.ts\" \"adapter/**/*.test.ts\"",
+    "serve:mcp": "node adapter/mcp-server.ts"
   },
   "engines": {
     "node": ">=22.6"
   },
-  "dependencies": {},
-  "devDependencies": {}
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  }
 }
