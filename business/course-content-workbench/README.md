@@ -17,7 +17,9 @@
 | **素材与任务的业务对象隔离** | **本目录新增（复用底座 Session/Workspace 模型）** |
 | **账号管理与三层访问撤销** | **本目录新增（自研业务层）** |
 
-改这个件事的方式是**纯增量**：新增一个 `packages/` 包、零外部依赖、不触碰 `bun.lock`。这既是"不改动 Agent 执行核心"的证据，也让本地 `git log` 里业务提交与上游提交泾渭分明。
+改造采取**纯增量**方式：新增一个独立目录、**零外部依赖**、不触碰 `bun.lock`，也不修改底座任何一行代码。这既是"不改动 Agent 执行核心"的证据，也让 `git log` 里业务提交与上游提交泾渭分明。
+
+之所以放在仓库根的 `business/` 而不是 `packages/` 下，是有意的：根 `package.json` 的 `workspaces` 是 `packages/*` 与 `apps/*`，而 CI 跑的是 `bun install --frozen-lockfile`。塞进 `packages/` 会让 lockfile 少一条 workspace 记录，**CI 直接失败**。放在 `business/` 下则完全不进依赖图，上游锁文件保持逐字节一致。
 
 ---
 
@@ -83,6 +85,8 @@ const result = await buildChapters(segments, { groupByModel, pageHints, timeoutM
 
 ```bash
 cd packages/course-content-workbench
+```bash
+cd business/course-content-workbench
 npm test          # 需要 Node >= 22.6，直接用内置 type stripping 跑 .ts
 ```
 
@@ -92,8 +96,25 @@ npm test          # 需要 Node >= 22.6，直接用内置 type stripping 跑 .ts
 
 ---
 
-## 六、许可与归属
+## 六、当前集成程度（诚实说明）
 
-- 上游：**Apache-2.0**，Copyright 2026 Craft Docs Ltd. —— 见仓库根目录 [`LICENSE`](../../LICENSE) 与 [`NOTICE`](../../NOTICE)
+这一层目前是 **side-car（旁挂）状态**，不是"装进去就能用"：
+
+| | 状态 |
+| --- | --- |
+| 业务逻辑本身 | ✅ 完整实现，38 个测试通过，strict 类型检查通过 |
+| 与底座的**类型耦合** | ⚠️ `src/ports.ts` 是自己定义的窄接口，形状照着底座的 `SessionToolContext` / `AgentEvent` 写，**但没有 `import '@craft-agent/*'`** |
+| 与底座的**运行期接线** | ⚠️ 还没有注册模块把这五个能力挂到 session tool registry 上 |
+| 独立运行 | ✅ 可以单独跑测试，不依赖底座启动 |
+
+**为什么先这样**：放进 `packages/*` 会污染 `bun.lock`（见第一节），而真正接线需要依赖底座类型、必须 install 之后才能验证。在 install 之前写接线，等于写没验证过的代码。
+
+**还差的一步**（很短）：补一个 `adapter/` 目录，做两件事——把底座真实的 `SessionToolContext` 适配成这里的 `ToolContext`，以及把这五个能力注册进 session tool registry 并把 `WorkbenchEvent` 转成 `AgentEvent`。这一步需要在装好依赖的环境里写和测试。
+
+---
+
+## 七、许可与归属
+
+- 上游：**Apache-2.0**，Copyright 2026 Craft Docs Ltd. —— 见仓库根目录 [`LICENSE`](../../../LICENSE) 与 [`NOTICE`](../../../NOTICE)
 - 本目录同样以 Apache-2.0 提供；根目录 `NOTICE` 已按 Apache-2.0 §4(d) 追加了修改声明
 - 音色克隆、视频解析、低代码工作流均为**第三方服务接入，非自研模型**
