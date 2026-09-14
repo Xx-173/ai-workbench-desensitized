@@ -1,0 +1,17 @@
+{
+  "name": "@workbench/course-content",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Business layer that turns the Craft Agents base into a course-content AI productivity workbench.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "test": "node --test \"src/**/*.test.ts\""
+  },
+  "engines": {
+    "node": ">=22.6"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

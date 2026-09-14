@@ -1,0 +1,53 @@
+{
+  "$comment": "PLACEHOLDER-ONLY. No real endpoint, token, project id or account appears in this repository. Copy to your own secret store and fill in; do NOT commit filled copies.",
+  "capabilities": [
+    {
+      "id": "voice-clone",
+      "transport": "mcp",
+      "provider": "third-party-voice-service",
+      "required": ["VOICE_SERVICE_BASE_URL", "VOICE_SERVICE_TOKEN"],
+      "endpointPath": "/v1/voices/clone",
+      "notes": "第三方音色服务，非自研模型。"
+    },
+    {
+      "id": "video-parse",
+      "transport": "in-process",
+      "provider": "third-party-video-service",
+      "required": ["VIDEO_PARSE_BASE_URL", "VIDEO_PARSE_TOKEN"],
+      "endpointPath": "/v1/videos/analyze",
+      "notes": "返回带时间戳的转写分段；章节聚合与规则回退在业务层完成。"
+    },
+    {
+      "id": "script-clean",
+      "transport": "in-process",
+      "provider": "lowcode-workflow",
+      "required": ["LOWCODE_WORKFLOW_BASE_URL", "LOWCODE_WORKFLOW_TOKEN"],
+      "endpointPath": "/v1/workflows/run",
+      "notes": "对应话术清洗工作流。"
+    },
+    {
+      "id": "text-qc",
+      "transport": "in-process",
+      "provider": "lowcode-workflow",
+      "required": ["LOWCODE_WORKFLOW_BASE_URL", "LOWCODE_WORKFLOW_TOKEN"],
+      "endpointPath": "/v1/workflows/run",
+      "notes": "对应文字质检工作流。"
+    },
+    {
+      "id": "copywriting",
+      "transport": "in-process",
+      "provider": "lowcode-workflow",
+      "required": ["LOWCODE_WORKFLOW_BASE_URL", "LOWCODE_WORKFLOW_TOKEN"],
+      "endpointPath": "/v1/workflows/run",
+      "notes": "对应文案生成工作流。"
+    }
+  ],
+  "envTemplate": {
+    "VOICE_SERVICE_BASE_URL": "https://REPLACE_ME.invalid",
+    "VOICE_SERVICE_TOKEN": "REPLACE_ME",
+    "VIDEO_PARSE_BASE_URL": "https://REPLACE_ME.invalid",
+    "VIDEO_PARSE_TOKEN": "REPLACE_ME",
+    "LOWCODE_WORKFLOW_BASE_URL": "https://REPLACE_ME.invalid",
+    "LOWCODE_WORKFLOW_TOKEN": "REPLACE_ME"
+  }
+}
