@@ -2,7 +2,7 @@
   "name": "@workbench/course-content",
   "version": "0.1.0",
   "private": true,
-  "description": "Business layer that turns the Craft Agents base into a course-content AI productivity workbench.",
+  "description": "Additive MCP business layer for course-content operations on Craft Agents.",
   "license": "Apache-2.0",
   "type": "module",
   "exports": "./src/index.ts",
