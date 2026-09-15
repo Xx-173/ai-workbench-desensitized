@@ -1,70 +1,72 @@
-# 课程内容 AI 工作台
+# 多 Agent 接入与治理工作台
 
-> 面向课程内容生产的 AI 业务工作台：将课程素材处理能力封装为可调用工具，并通过 MCP 接入既有 Agent 主机。
+> 基于 Craft Agents 的业务化扩展：把 Python 脚本、HTTP / Dify / Coze / Fish 工作流和 MCP Agent 接入同一工作台，由基座统一完成密钥引用、会话上下文、任务隔离与用量统计。
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-这是一个基于 [Craft Agents](https://github.com/craft-ai-agents/craft-agents-oss) 的 Apache-2.0 增量扩展，不是对其 Agent Runtime、桌面端或模型能力的重新实现。底座负责会话、Agent 执行与通用工具生态；本仓库新增的课程内容业务代码位于 [`business/course-content-workbench`](business/course-content-workbench)。完整的上游归属与修改声明见 [NOTICE](NOTICE)。
+这是 [Craft Agents](https://github.com/craft-ai-agents/craft-agents-oss) 的 Apache-2.0 增量扩展，不重新实现其 Agent Runtime、桌面端、Web 端或模型能力。Craft 底座提供会话、Agent 执行、Workspace、凭据管理与 MCP 生态；本仓库新增的业务层位于 [`business/agent-workbench`](business/agent-workbench)。完整的上游归属及修改声明见 [NOTICE](NOTICE)。
 
-## 已实现的业务能力
+## 产品定位
 
-业务层将能力的名称、说明、输入 Schema、传输方式和调用实现收敛在一张声明式登记表中；注册表负责统一发现、入参校验和调用。当前包含五类课程内容工具：
+课程视频、音色和文案只是首批可接入场景，不是产品边界。每一个接入都以受控 Manifest 说明名称、输入 Schema、调用形态、超时和**密钥引用名**；真实 Key、端点、项目 ID 和业务素材不进入代码库。
 
-| 工具 | 用途 | 产物 / 可靠性边界 |
+| Agent 类型 | 接入方式 | 常见场景 |
 | --- | --- | --- |
-| `clone_voice` | 调用第三方音色服务生成目标语音 | 结果引用写入任务私有目录；不是自研音色模型 |
-| `parse_video` | 调用第三方转写服务后生成视频章节 | 模型输出会做形状、边界、顺序和章节完整性校验；无效时回退到确定性规则 |
-| `clean_script` | 调用外部工作流清洗课程话术 | 输出写入当前任务的私有产物目录 |
-| `qc_text` | 调用外部工作流返回文案问题项 | 配置缺失会显式报错，不会静默走默认地址 |
-| `generate_copy` | 调用外部工作流生成课程营销文案 | 输出写入当前任务的私有产物目录 |
+| Python 脚本 | stdin 输入 JSON、stdout 输出 JSON；无 shell 执行，只注入声明过的凭据别名 | 话术清洗、结构化抽取、内部规则脚本 |
+| HTTP Agent | 通用 JSON、Dify 工作流或 Coze 工作流载荷 | 视频解析、Fish 音色生成、文案生成、低代码 Agent |
+| MCP Agent | 受控 stdio MCP 子进程，调用其声明的工具 | 其他框架、已有 MCP 服务、专用工具链 |
 
-同一份注册表既可在宿主进程内调用，也可由 stdio MCP 服务通过 `tools/list` / `tools/call` 暴露；新增能力只需增加一条登记项，不需要改动 Agent 执行核心。
+工作台将它们统一注册为可发现、可校验、可从 MCP 调用的工具。新增 Agent 通常只需新增一条配置，而不需要修改 Craft 的执行核心。
 
-## 可靠性与隔离设计
+## 已实现能力
 
-- **章节聚合有确定性降级**：视频章节固定为开场、知识内容、营销、收尾四段。模型抛错、缺段、越界、重叠或顺序错误时，调用方仍会收到按时间均分的有序章节，而不是空结果或未处理异常。
-- **任务级文件隔离**：每个任务独占 `inputs/`、`outputs/`、`tmp/` 目录；任务标识与写入路径经过白名单校验，拒绝路径穿越和跨任务覆盖。
-- **冻结即时收口**：账号冻结同时使已签发凭据失效、主动关闭已建立连接、清理授权缓存并在工具执行前复核状态；撤销报告与顺序均可由测试验证。
-- **与底座保持契约**：Session 上下文与 Agent 事件适配使用结构化类型，并由上游契约测试检测字段或事件枚举的静默漂移。
+- **Manifest 校验与注册**：启动前校验 Agent ID、工具名、输入 Schema、凭据引用、超时与传输配置；拒绝重复工具名和不安全格式。
+- **统一执行适配**：`agent-runtime.ts` 适配 HTTP、Python、MCP 三类 Agent；HTTP 内置通用、Dify 与 Coze 工作流载荷模式，Python/MCP 均禁止 shell。
+- **密钥不落库**：运行时经 `CredentialReader` 获取引用，嵌入 Craft 时可复用其 Credential Manager；Python/MCP 子进程只拿到本 Agent 已声明的凭据别名。
+- **隐私友好的用量账本**：每次执行记录 Agent 标识、类型、时长、成功/失败、输入/输出字节数及上游可选 token 数；不保存提示词、结果正文、端点或密钥。独立 MCP 服务默认写到 Workspace 的 `.agent-workbench/usage.jsonl`。
+- **任务与访问边界**：每个任务独占 `inputs/`、`outputs/`、`tmp/`；路径越界被拒绝。账号冻结会使已签发凭据失效、关闭长连接、清理授权缓存并在调用前复核状态。
+- **MCP 双向接线**：同一注册表既可被宿主进程直接调用，也可通过 stdio MCP 服务对外暴露；工作台还能以 MCP Client 调用其他 Agent。
 
-## 运行与验证
+仓库保留了音色生成、视频解析、话术清洗、文本质检、文案生成五个首批业务样例。它们用于展示接入及任务隔离方式，不等同于自研模型或已经部署的第三方服务。
 
-业务包独立维护依赖，不进入底座的 Bun workspace。需要 Node.js 22.6 或更高版本。
+## 配置与运行
+
+需要 Node.js 22.6 或更高版本。业务包不进入 Craft 的 Bun workspace，因此不会改动上游锁文件。
 
 ```bash
-cd business/course-content-workbench
+cd business/agent-workbench
 npm ci
 npm test
 ```
 
-测试覆盖能力登记、MCP `tools/list` / `tools/call`、任务目录隔离、章节回退、账号撤销和上游契约；当前为 64 个测试用例。
+复制 [`config/agents.example.json`](business/agent-workbench/config/agents.example.json) 到仓库外的受控路径，按你的密钥管理方案填入**引用名或部署配置**，不要提交实际 Key。示例含视频解析、Fish 兼容音色、Python 话术清洗、Dify 文案和外部 MCP Agent。
 
-可将业务层以独立 stdio MCP 服务启动：
+以独立 MCP 服务加载该配置：
 
 ```bash
-cd business/course-content-workbench
-npm run serve:mcp -- --session-id demo-1 --workspace-root /absolute/path/to/workspace
+cd business/agent-workbench
+npm run serve:mcp -- --session-id demo-1 --workspace-root /absolute/path/to/workspace --agents-config /safe/path/agents.json
 ```
 
-服务会暴露五个工具。调用第三方服务前，请在运行环境中按占位变量提供端点和凭据；变量名称与示例见 [`config/capabilities.example.json`](business/course-content-workbench/config/capabilities.example.json)。
+不带 `--agents-config` 时，服务仍提供仓库内五个示例工具；带 Manifest 可选择 `includeBuiltinAgents: false`，只暴露你的业务 Agent。当前测试为 70 个用例，覆盖注册、三类 Agent 适配、凭据缺失、用量脱敏、MCP 调用、任务隔离、降级和访问撤销。
 
 ## 当前边界
 
-- 这是可独立启动、可被 MCP 客户端接入的业务扩展包；当前没有修改 Craft 原生 UI 或将工具强行注册进其内置工具数组。
-- 音色、转写和低代码工作流均为第三方服务接入，仓库不包含真实端点、密钥、项目 ID、课程素材或用户数据。
-- 本仓库提供代码与测试级验证，不声称已有生产部署、业务指标或自研大模型能力。
-- 课程业务目前没有独立的评测集或 Trace Benchmark；章节回退等可测试的确定性行为不等同于模型效果评测。
+- 已实现的是业务层与可运行的 MCP 适配，尚未在 Craft 原生 UI 增加“可视化配置 Agent / 用量看板”页面；当前配置入口为受控 JSON Manifest 和宿主的凭据管理能力。
+- Dify、Coze、Fish 等仅提供协议适配和脱敏示例，不包含真实工作流、账户、端点、素材或已验证的生产连通性。
+- 用量账本提供调用与 token 聚合的基础数据；成本换算、租户配额、账单和监控告警需要结合所选模型供应商和部署环境继续建设。
+- 本仓库提供代码与测试级验证，不主张生产规模、业务指标、自研大模型或 Craft 底座本身的能力归属。
 
 ## 目录
 
 ```text
-business/course-content-workbench/
-├── src/          # 能力登记、章节聚合、任务隔离、访问撤销与事件
-├── adapter/       # MCP 服务、宿主上下文与事件契约适配
-├── config/        # 不含真实信息的能力配置模板
-└── README.md      # 模块级设计与运行说明
+business/agent-workbench/
+├── src/          # Manifest、运行时、用量账本、任务隔离与访问撤销
+├── adapter/       # MCP Server、宿主上下文与事件契约适配
+├── config/        # 只含占位符的 Agent 配置模板
+└── README.md      # 模块级接入及安全说明
 ```
 
 ## 许可证与上游
 
-本仓库遵循 [Apache-2.0](LICENSE)。Craft Agents 的版权声明、许可证和本项目的修改通知均保留在 [NOTICE](NOTICE) 中。除根目录的项目说明与元数据外，业务改动集中在 `business/course-content-workbench/`；上游的 `apps/` 与 `packages/` 源代码没有因业务层接入而修改。
+本仓库遵循 [Apache-2.0](LICENSE)。Craft Agents 的版权声明、许可证和本项目的修改通知均保留在 [NOTICE](NOTICE) 中。除根目录说明和元数据外，业务改动集中在 `business/agent-workbench/`；上游的 `apps/` 与 `packages/` 源代码没有因业务层接入而修改。

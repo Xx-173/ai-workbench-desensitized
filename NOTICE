@@ -25,12 +25,13 @@ under the Apache License 2.0. The copyright notices above are retained in full.
 The following additions and documentation/metadata updates were made on top
 of the upstream project and are NOT authored by Craft Docs Ltd.:
 
-  business/course-content-workbench/
+  business/agent-workbench/
 
-      A business layer adapting the base for course-content operations.
-      It contains a declarative AI-capability registry, deterministic
-      chapter aggregation with rule fallback for long-running tasks,
-      per-task artifact isolation, and account freeze / access revocation.
+      A multi-agent integration and governance layer. It contains a validated
+      Agent Manifest registry; HTTP, Python and MCP execution adapters;
+      explicit credential references; privacy-preserving usage accounting;
+      per-task artifact isolation; deterministic chapter fallback; and
+      account freeze / access revocation.
 
       The repository README and root package description were updated to
       describe this derivative work accurately.

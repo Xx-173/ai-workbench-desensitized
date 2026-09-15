@@ -58,6 +58,10 @@ pnpm-lock.yaml
 # Craft Agent local data (sessions, credentials, config)
 .craft-agent/
 
+# Agent Workbench local manifests and aggregate usage ledger
+.agent-workbench/
+business/agent-workbench/config/agents.local.json
+
 # SSH keys and secrets
 *.pem
 *.key

@@ -1,8 +1,8 @@
 {
-  "name": "@workbench/course-content",
+  "name": "@workbench/agent-integration",
   "version": "0.1.0",
   "private": true,
-  "description": "Additive MCP business layer for course-content operations on Craft Agents.",
+  "description": "Additive multi-agent integration and governance layer for Craft Agents.",
   "license": "Apache-2.0",
   "type": "module",
   "exports": "./src/index.ts",

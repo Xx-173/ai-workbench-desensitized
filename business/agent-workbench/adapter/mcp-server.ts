@@ -31,6 +31,8 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 import { createWorkbenchRegistry } from '../src/index.ts';
+import { parseAgentWorkbenchConfig } from '../src/agent-manifest.ts';
+import { JsonlUsageLedger } from '../src/usage-ledger.ts';
 import type { CredentialReader, ToolContext } from '../src/ports.ts';
 import { listCapabilityTools, callCapabilityTool } from './mcp-tools.ts';
 import { staticCredentials, type SessionContextLike } from './session-context-bridge.ts';
@@ -38,6 +40,8 @@ import { staticCredentials, type SessionContextLike } from './session-context-br
 export interface ServerConfig {
   readonly sessionId: string;
   readonly workspaceRootPath: string;
+  /** Optional admin-controlled JSON manifest for Python / HTTP / MCP agents. */
+  readonly agentsConfigPath?: string;
 }
 
 export function parseArgs(argv: readonly string[]): ServerConfig {
@@ -50,7 +54,8 @@ export function parseArgs(argv: readonly string[]): ServerConfig {
   if (!sessionId || !workspaceRootPath) {
     throw new Error('Both --session-id and --workspace-root are required');
   }
-  return { sessionId, workspaceRootPath };
+  const agentsConfigPath = read('--agents-config');
+  return { sessionId, workspaceRootPath, ...(agentsConfigPath ? { agentsConfigPath } : {}) };
 }
 
 /**
@@ -95,7 +100,17 @@ export function advertisedTools(): Tool[] {
 }
 
 export async function startServer(config: ServerConfig): Promise<void> {
-  const registry = createWorkbenchRegistry();
+  const configured = config.agentsConfigPath
+    ? parseAgentWorkbenchConfig(JSON.parse(readFileSync(config.agentsConfigPath, 'utf8')) as unknown)
+    : undefined;
+  const registry = createWorkbenchRegistry({
+    ...(configured?.agents ? { agents: configured.agents } : {}),
+    ...(configured?.includeBuiltinAgents === undefined ? {} : { includeBuiltinAgents: configured.includeBuiltinAgents }),
+    runtime: {
+      // The standalone server persists only aggregate-safe operational facts.
+      usageRecorder: new JsonlUsageLedger(join(config.workspaceRootPath, '.agent-workbench', 'usage.jsonl')),
+    },
+  });
   const host = createHostContext(config);
   const ctx: ToolContext = {
     sessionId: host.sessionId,
@@ -104,7 +119,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   };
 
   const server = new Server(
-    { name: 'course-content-workbench', version: '0.1.0' },
+    { name: 'agent-workbench', version: '0.1.0' },
     { capabilities: { tools: {} } },
   );
 
@@ -134,7 +149,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`course-content-workbench MCP server started for session ${config.sessionId}`);
+  console.error(`agent-workbench MCP server started for session ${config.sessionId}`);
 }
 
 function isDirectRun(): boolean {

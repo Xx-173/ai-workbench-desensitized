@@ -2,7 +2,7 @@
   "name": "craft-agent",
   "version": "0.13.3",
   "license": "Apache-2.0",
-  "description": "Course-content AI workbench built as an additive extension on Craft Agents",
+  "description": "Multi-agent integration and governance workbench built as an additive extension on Craft Agents",
   "type": "module",
   "private": true,
   "trustedDependencies": [

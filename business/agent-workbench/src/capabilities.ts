@@ -1,10 +1,11 @@
 /**
- * The registration surface — the ONLY file edited when a capability is added.
+ * First-party sample agents used to demonstrate the registration surface.
  *
  * Upstream services (third-party voice cloning, third-party video parsing,
  * and the low-code workflows) are external integrations, not in-house models.
  * Nothing here ships with a real endpoint or key; see
- * `config/capabilities.example.json`.
+ * `config/agents.example.json`. New external agents normally use manifests
+ * instead of requiring a source-code change in this file.
  */
 
 import type { CapabilityEntry } from './capability-registry.ts';

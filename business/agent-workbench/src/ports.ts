@@ -6,7 +6,7 @@
  * unit-tested with a stub instead of booting the whole Agent runtime.
  *
  * Nothing in this file contains a real endpoint, credential or person — see
- * `config/capabilities.example.json` for the placeholder-only input format.
+ * `config/agents.example.json` for the placeholder-only input format.
  */
 
 export type JsonValue =

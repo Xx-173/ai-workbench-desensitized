@@ -1,0 +1,56 @@
+{
+  "$comment": "Reference names and placeholders only. Copy this file outside the repository, replace placeholders in your secret store, and do not commit filled copies.",
+  "includeBuiltinAgents": false,
+  "agents": [
+    {
+      "id": "video-analysis",
+      "toolName": "analyze_video",
+      "description": "调用视频解析 Agent，返回结构化转写或镜头分析结果。",
+      "kind": "http",
+      "timeoutMs": 90000,
+      "inputSchema": { "type": "object", "properties": { "videoUrl": { "type": "string", "description": "已授权的视频地址" } }, "required": ["videoUrl"] },
+      "config": { "baseUrlEnv": "VIDEO_AGENT_BASE_URL", "tokenEnv": "VIDEO_AGENT_API_KEY", "path": "/v1/analyze", "payloadMode": "input" }
+    },
+    {
+      "id": "fish-voice",
+      "toolName": "generate_voice",
+      "description": "调用 Fish 或兼容 HTTP 的音色生成 Agent。",
+      "kind": "http",
+      "inputSchema": { "type": "object", "properties": { "referenceAudio": { "type": "string", "description": "已授权的参考音频" }, "text": { "type": "string", "description": "待合成文案" } }, "required": ["referenceAudio", "text"] },
+      "config": { "baseUrlEnv": "FISH_AGENT_BASE_URL", "tokenEnv": "FISH_AGENT_API_KEY", "path": "/v1/tts", "payloadMode": "input" }
+    },
+    {
+      "id": "script-cleaner",
+      "toolName": "clean_script",
+      "description": "调用受管 Python 脚本清洗话术；脚本从 stdin 读取 JSON、向 stdout 输出 JSON。",
+      "kind": "python",
+      "credentials": [{ "name": "LLM_API_KEY", "source": "SCRIPT_CLEANER_LLM_KEY" }],
+      "inputSchema": { "type": "object", "properties": { "text": { "type": "string", "description": "待清洗话术" } }, "required": ["text"] },
+      "config": { "command": "python", "args": ["/path/to/your/clean_script.py"] }
+    },
+    {
+      "id": "copywriter-dify",
+      "toolName": "generate_copy",
+      "description": "调用 Dify 工作流生成文案。",
+      "kind": "http",
+      "inputSchema": { "type": "object", "properties": { "topic": { "type": "string", "description": "主题" }, "audience": { "type": "string", "description": "受众" } }, "required": ["topic", "audience"] },
+      "config": { "baseUrlEnv": "DIFY_BASE_URL", "tokenEnv": "DIFY_API_KEY", "path": "/v1/workflows/run", "payloadMode": "dify-workflow" }
+    },
+    {
+      "id": "script-qc-coze",
+      "toolName": "qc_script",
+      "description": "调用 Coze 工作流做话术质检。",
+      "kind": "http",
+      "inputSchema": { "type": "object", "properties": { "text": { "type": "string", "description": "待质检话术" } }, "required": ["text"] },
+      "config": { "baseUrlEnv": "COZE_BASE_URL", "tokenEnv": "COZE_API_KEY", "path": "/v1/workflow/run", "payloadMode": "coze-workflow", "staticBody": { "workflow_id": "REPLACE_ME" } }
+    },
+    {
+      "id": "external-mcp-agent",
+      "toolName": "run_external_agent",
+      "description": "调用以 stdio MCP 暴露的其他框架 Agent。",
+      "kind": "mcp",
+      "inputSchema": { "type": "object", "properties": { "task": { "type": "string", "description": "任务描述" } }, "required": ["task"] },
+      "config": { "command": "node", "args": ["/path/to/your/mcp-server.mjs"], "toolName": "run_task" }
+    }
+  ]
+}
