@@ -8,7 +8,8 @@
   "exports": "./src/index.ts",
   "scripts": {
     "test": "node --test \"src/**/*.test.ts\" \"adapter/**/*.test.ts\"",
-    "serve:mcp": "node adapter/mcp-server.ts"
+    "serve:mcp": "node adapter/mcp-server.ts",
+    "serve:control": "node adapter/control-center-server.ts"
   },
   "engines": {
     "node": ">=22.6"

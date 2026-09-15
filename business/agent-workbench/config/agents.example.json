@@ -8,6 +8,7 @@
       "description": "调用视频解析 Agent，返回结构化转写或镜头分析结果。",
       "kind": "http",
       "timeoutMs": 90000,
+      "policy": { "retry": { "maxAttempts": 2, "backoffMs": 500 }, "rateLimit": { "maxRequests": 12, "windowMs": 60000 }, "quota": { "maxCallsPerDay": 500 } },
       "inputSchema": { "type": "object", "properties": { "videoUrl": { "type": "string", "description": "已授权的视频地址" } }, "required": ["videoUrl"] },
       "config": { "baseUrlEnv": "VIDEO_AGENT_BASE_URL", "tokenEnv": "VIDEO_AGENT_API_KEY", "path": "/v1/analyze", "payloadMode": "input" }
     },
@@ -16,6 +17,7 @@
       "toolName": "generate_voice",
       "description": "调用 Fish 或兼容 HTTP 的音色生成 Agent。",
       "kind": "http",
+      "policy": { "retry": { "maxAttempts": 2, "backoffMs": 500 }, "rateLimit": { "maxRequests": 20, "windowMs": 60000 } },
       "inputSchema": { "type": "object", "properties": { "referenceAudio": { "type": "string", "description": "已授权的参考音频" }, "text": { "type": "string", "description": "待合成文案" } }, "required": ["referenceAudio", "text"] },
       "config": { "baseUrlEnv": "FISH_AGENT_BASE_URL", "tokenEnv": "FISH_AGENT_API_KEY", "path": "/v1/tts", "payloadMode": "input" }
     },
@@ -24,6 +26,7 @@
       "toolName": "clean_script",
       "description": "调用受管 Python 脚本清洗话术；脚本从 stdin 读取 JSON、向 stdout 输出 JSON。",
       "kind": "python",
+      "policy": { "retry": { "maxAttempts": 1 }, "rateLimit": { "maxRequests": 60, "windowMs": 60000 } },
       "credentials": [{ "name": "LLM_API_KEY", "source": "SCRIPT_CLEANER_LLM_KEY" }],
       "inputSchema": { "type": "object", "properties": { "text": { "type": "string", "description": "待清洗话术" } }, "required": ["text"] },
       "config": { "command": "python", "args": ["/path/to/your/clean_script.py"] }
@@ -33,6 +36,7 @@
       "toolName": "generate_copy",
       "description": "调用 Dify 工作流生成文案。",
       "kind": "http",
+      "policy": { "retry": { "maxAttempts": 2, "backoffMs": 500 }, "rateLimit": { "maxRequests": 20, "windowMs": 60000 }, "quota": { "maxCallsPerDay": 1000, "maxTokensPerDay": 2000000 }, "cost": { "inputPerMillion": 0, "outputPerMillion": 0, "currency": "USD" } },
       "inputSchema": { "type": "object", "properties": { "topic": { "type": "string", "description": "主题" }, "audience": { "type": "string", "description": "受众" } }, "required": ["topic", "audience"] },
       "config": { "baseUrlEnv": "DIFY_BASE_URL", "tokenEnv": "DIFY_API_KEY", "path": "/v1/workflows/run", "payloadMode": "dify-workflow" }
     },

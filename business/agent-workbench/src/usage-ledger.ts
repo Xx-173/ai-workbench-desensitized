@@ -18,10 +18,15 @@ export interface AgentUsageEvent {
   readonly outputBytes: number;
   readonly inputTokens?: number;
   readonly outputTokens?: number;
+  readonly attempts?: number;
 }
 
 export interface UsageRecorder {
   record(event: AgentUsageEvent): Promise<void> | void;
+}
+
+export interface UsageReader {
+  listSince(occurredAfter: Date): Promise<readonly AgentUsageEvent[]> | readonly AgentUsageEvent[];
 }
 
 export interface UsageSummary {
@@ -36,7 +41,7 @@ export interface UsageSummary {
   readonly outputTokens: number;
 }
 
-export class InMemoryUsageLedger implements UsageRecorder {
+export class InMemoryUsageLedger implements UsageRecorder, UsageReader {
   private readonly events: AgentUsageEvent[] = [];
 
   record(event: AgentUsageEvent): void {
@@ -45,6 +50,11 @@ export class InMemoryUsageLedger implements UsageRecorder {
 
   list(): readonly AgentUsageEvent[] {
     return [...this.events];
+  }
+
+  listSince(occurredAfter: Date): readonly AgentUsageEvent[] {
+    const threshold = occurredAfter.getTime();
+    return this.events.filter((event) => Date.parse(event.occurredAt) >= threshold);
   }
 
   summarize(): readonly UsageSummary[] {
@@ -71,7 +81,7 @@ export class InMemoryUsageLedger implements UsageRecorder {
 }
 
 /** JSONL keeps a durable audit trail without introducing a database dependency. */
-export class JsonlUsageLedger implements UsageRecorder {
+export class JsonlUsageLedger implements UsageRecorder, UsageReader {
   private readonly path: string;
 
   constructor(path: string) {
@@ -84,6 +94,17 @@ export class JsonlUsageLedger implements UsageRecorder {
   }
 
   async summarize(): Promise<readonly UsageSummary[]> {
+    const ledger = new InMemoryUsageLedger();
+    for (const event of await this.readEvents()) ledger.record(event);
+    return ledger.summarize();
+  }
+
+  async listSince(occurredAfter: Date): Promise<readonly AgentUsageEvent[]> {
+    const threshold = occurredAfter.getTime();
+    return (await this.readEvents()).filter((event) => Date.parse(event.occurredAt) >= threshold);
+  }
+
+  private async readEvents(): Promise<readonly AgentUsageEvent[]> {
     let raw = '';
     try {
       raw = await readFile(this.path, 'utf8');
@@ -91,12 +112,12 @@ export class JsonlUsageLedger implements UsageRecorder {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw error;
     }
-    const ledger = new InMemoryUsageLedger();
+    const events: AgentUsageEvent[] = [];
     for (const line of raw.split(/\r?\n/)) {
       if (!line.trim()) continue;
       const event = JSON.parse(line) as AgentUsageEvent;
-      ledger.record(event);
+      events.push(event);
     }
-    return ledger.summarize();
+    return events;
   }
 }

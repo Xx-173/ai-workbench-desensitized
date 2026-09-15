@@ -32,6 +32,8 @@ import {
 
 import { createWorkbenchRegistry } from '../src/index.ts';
 import { parseAgentWorkbenchConfig } from '../src/agent-manifest.ts';
+import { ExecutionGovernor } from '../src/execution-governor.ts';
+import { EncryptedFileSecretVault } from '../src/secret-vault.ts';
 import { JsonlUsageLedger } from '../src/usage-ledger.ts';
 import type { CredentialReader, ToolContext } from '../src/ports.ts';
 import { listCapabilityTools, callCapabilityTool } from './mcp-tools.ts';
@@ -42,6 +44,9 @@ export interface ServerConfig {
   readonly workspaceRootPath: string;
   /** Optional admin-controlled JSON manifest for Python / HTTP / MCP agents. */
   readonly agentsConfigPath?: string;
+  /** Optional AES-GCM local secret store created by the Control Center. */
+  readonly secretStorePath?: string;
+  readonly masterKeyEnv?: string;
 }
 
 export function parseArgs(argv: readonly string[]): ServerConfig {
@@ -55,7 +60,15 @@ export function parseArgs(argv: readonly string[]): ServerConfig {
     throw new Error('Both --session-id and --workspace-root are required');
   }
   const agentsConfigPath = read('--agents-config');
-  return { sessionId, workspaceRootPath, ...(agentsConfigPath ? { agentsConfigPath } : {}) };
+  const secretStorePath = read('--secret-store');
+  const masterKeyEnv = read('--master-key-env');
+  return {
+    sessionId,
+    workspaceRootPath,
+    ...(agentsConfigPath ? { agentsConfigPath } : {}),
+    ...(secretStorePath ? { secretStorePath } : {}),
+    ...(masterKeyEnv ? { masterKeyEnv } : {}),
+  };
 }
 
 /**
@@ -90,6 +103,16 @@ export function credentialsFromEnv(env: NodeJS.ProcessEnv = process.env): Creden
   return staticCredentials(env as unknown as Record<string, string | null>);
 }
 
+async function credentialsForRequest(config: ServerConfig): Promise<CredentialReader> {
+  const environment = credentialsFromEnv();
+  if (!config.secretStorePath) return environment;
+  const keyEnv = config.masterKeyEnv ?? 'AGENT_WORKBENCH_MASTER_KEY';
+  const masterKey = process.env[keyEnv];
+  if (!masterKey) throw new Error(`Missing required master-key environment variable: ${keyEnv}`);
+  const vault = await EncryptedFileSecretVault.open(config.secretStorePath, masterKey);
+  return { read: (name) => vault.read(name) ?? environment.read(name) };
+}
+
 /** Exposed for tests: the full tool list the server advertises. */
 export function advertisedTools(): Tool[] {
   return listCapabilityTools(createWorkbenchRegistry()).map((tool) => ({
@@ -100,17 +123,19 @@ export function advertisedTools(): Tool[] {
 }
 
 export async function startServer(config: ServerConfig): Promise<void> {
-  const configured = config.agentsConfigPath
-    ? parseAgentWorkbenchConfig(JSON.parse(readFileSync(config.agentsConfigPath, 'utf8')) as unknown)
-    : undefined;
-  const registry = createWorkbenchRegistry({
-    ...(configured?.agents ? { agents: configured.agents } : {}),
-    ...(configured?.includeBuiltinAgents === undefined ? {} : { includeBuiltinAgents: configured.includeBuiltinAgents }),
-    runtime: {
-      // The standalone server persists only aggregate-safe operational facts.
-      usageRecorder: new JsonlUsageLedger(join(config.workspaceRootPath, '.agent-workbench', 'usage.jsonl')),
-    },
-  });
+  const usage = new JsonlUsageLedger(join(config.workspaceRootPath, '.agent-workbench', 'usage.jsonl'));
+  const governor = new ExecutionGovernor({ usageReader: usage });
+  /** Reloads the Control Center manifest at MCP request boundaries. */
+  const registryForRequest = () => {
+    const configured = config.agentsConfigPath
+      ? parseAgentWorkbenchConfig(JSON.parse(readFileSync(config.agentsConfigPath, 'utf8')) as unknown)
+      : undefined;
+    return createWorkbenchRegistry({
+      ...(configured?.agents ? { agents: configured.agents } : {}),
+      ...(configured?.includeBuiltinAgents === undefined ? {} : { includeBuiltinAgents: configured.includeBuiltinAgents }),
+      runtime: { usageRecorder: usage, usageReader: usage, governor },
+    });
+  };
   const host = createHostContext(config);
   const ctx: ToolContext = {
     sessionId: host.sessionId,
@@ -124,7 +149,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: listCapabilityTools(registry).map((tool) => ({
+    tools: listCapabilityTools(registryForRequest()).map((tool) => ({
       name: tool.name,
       description: tool.description,
       inputSchema: tool.inputSchema as Tool['inputSchema'],
@@ -132,11 +157,13 @@ export async function startServer(config: ServerConfig): Promise<void> {
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
+    const registry = registryForRequest();
+    const requestContext: ToolContext = { ...ctx, credentials: await credentialsForRequest(config) };
     const { name, arguments: toolArgs } = request.params;
     const result = await callCapabilityTool(
       registry,
       { idForToolName: (toolName) => registry.idForToolName(toolName) },
-      ctx,
+      requestContext,
       name,
       (toolArgs ?? {}) as Record<string, unknown>,
     );

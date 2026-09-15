@@ -29,9 +29,10 @@ of the upstream project and are NOT authored by Craft Docs Ltd.:
 
       A multi-agent integration and governance layer. It contains a validated
       Agent Manifest registry; HTTP, Python and MCP execution adapters;
-      explicit credential references; privacy-preserving usage accounting;
-      per-task artifact isolation; deterministic chapter fallback; and
-      account freeze / access revocation.
+      explicit credential references; a local AES-GCM secret vault and
+      Control Center; retry, rate-limit, quota and cost-estimate policies;
+      privacy-preserving usage accounting; per-task artifact isolation;
+      deterministic chapter fallback; and account freeze / access revocation.
 
       The repository README and root package description were updated to
       describe this derivative work accurately.

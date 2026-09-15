@@ -15,7 +15,8 @@ import type { AgentManifest, CredentialBinding, HttpAgentConfig, McpAgentConfig,
 import type { Clock, JsonObject, JsonValue, ToolContext } from './ports.ts';
 import { systemClock } from './ports.ts';
 import { joinUrl, type FetchLike, MisconfiguredError } from './remote.ts';
-import type { AgentUsageEvent, UsageRecorder } from './usage-ledger.ts';
+import { ExecutionGovernor, retryDelayMs } from './execution-governor.ts';
+import type { AgentUsageEvent, UsageReader, UsageRecorder } from './usage-ledger.ts';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_PROCESS_OUTPUT_BYTES = 1_000_000;
@@ -35,6 +36,9 @@ export interface AgentRuntimeDependencies {
   readonly executePython?: AgentExecutor;
   readonly executeMcp?: AgentExecutor;
   readonly usageRecorder?: UsageRecorder;
+  readonly usageReader?: UsageReader;
+  /** Supply one shared governor when creating registries repeatedly. */
+  readonly governor?: ExecutionGovernor;
   readonly clock?: Clock;
 }
 
@@ -113,6 +117,10 @@ function safeChildEnvironment(credentials: Readonly<Record<string, string>>): No
   return { ...env, ...credentials };
 }
 
+function sleep(ms: number): Promise<void> {
+  return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
+
 async function executeJsonProcess(config: PythonAgentConfig, request: AgentExecutionRequest): Promise<JsonValue> {
   return new Promise((resolve, reject) => {
     const child = spawn(config.command, [...(config.args ?? [])], {
@@ -185,6 +193,7 @@ export function createAgentEntries(
 ): readonly CapabilityEntry[] {
   const clock = dependencies.clock ?? systemClock;
   const fetchImpl = dependencies.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
+  const governor = dependencies.governor ?? new ExecutionGovernor({ clock, usageReader: dependencies.usageReader });
   return manifests.map((manifest) => ({
     id: manifest.id,
     toolName: manifest.toolName,
@@ -195,14 +204,26 @@ export function createAgentEntries(
       const startedAt = clock.now();
       let output: JsonValue | undefined;
       let error: unknown;
+      let attempts = 0;
       try {
+        await governor.acquire(manifest);
         const credentials = credentialsFor(ctx, manifest.credentials);
         const request: AgentExecutionRequest = { manifest, input, ctx, credentials };
-        output = manifest.kind === 'http'
-          ? await executeHttp(manifest, ctx, input, fetchImpl)
-          : manifest.kind === 'python'
-            ? await (dependencies.executePython ?? ((item) => executeJsonProcess(manifest.config as PythonAgentConfig, item)))(request)
-            : await (dependencies.executeMcp ?? ((item) => executeMcp(manifest.config as McpAgentConfig, item)))(request);
+        const maxAttempts = manifest.policy?.retry?.maxAttempts ?? 1;
+        while (attempts < maxAttempts) {
+          attempts += 1;
+          try {
+            output = manifest.kind === 'http'
+              ? await executeHttp(manifest, ctx, input, fetchImpl)
+              : manifest.kind === 'python'
+                ? await (dependencies.executePython ?? ((item) => executeJsonProcess(manifest.config as PythonAgentConfig, item)))(request)
+                : await (dependencies.executeMcp ?? ((item) => executeMcp(manifest.config as McpAgentConfig, item)))(request);
+            break;
+          } catch (attemptError) {
+            if (attempts >= maxAttempts) throw attemptError;
+            await sleep(retryDelayMs(manifest, attempts));
+          }
+        }
         return { summary: `Agent ${manifest.id} completed`, raw: output };
       } catch (caught) {
         error = caught;
@@ -217,6 +238,7 @@ export function createAgentEntries(
           status: error ? 'error' : 'success',
           inputBytes: jsonByteLength(input),
           outputBytes: output === undefined ? 0 : jsonByteLength(output),
+          ...(attempts > 1 ? { attempts } : {}),
           ...(output === undefined ? {} : extractUsage(output)),
         };
         await dependencies.usageRecorder?.record(event);

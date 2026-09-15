@@ -42,6 +42,36 @@ export interface McpAgentConfig {
   readonly toolName: string;
 }
 
+export interface RetryPolicy {
+  /** Includes the first attempt; a retry is only for a failed invocation. */
+  readonly maxAttempts: number;
+  readonly backoffMs?: number;
+}
+
+export interface RateLimitPolicy {
+  readonly maxRequests: number;
+  readonly windowMs: number;
+}
+
+export interface QuotaPolicy {
+  readonly maxCallsPerDay?: number;
+  readonly maxTokensPerDay?: number;
+}
+
+/** Prices are optional administrator-configured estimates, per one million tokens. */
+export interface CostPolicy {
+  readonly inputPerMillion?: number;
+  readonly outputPerMillion?: number;
+  readonly currency?: string;
+}
+
+export interface AgentExecutionPolicy {
+  readonly retry?: RetryPolicy;
+  readonly rateLimit?: RateLimitPolicy;
+  readonly quota?: QuotaPolicy;
+  readonly cost?: CostPolicy;
+}
+
 export interface AgentManifest {
   readonly id: string;
   readonly toolName: string;
@@ -50,6 +80,7 @@ export interface AgentManifest {
   readonly inputSchema: InputSchema;
   readonly credentials?: readonly CredentialBinding[];
   readonly timeoutMs?: number;
+  readonly policy?: AgentExecutionPolicy;
   readonly config: HttpAgentConfig | PythonAgentConfig | McpAgentConfig;
 }
 
@@ -122,6 +153,56 @@ function parseArgs(value: unknown, field: string): readonly string[] | undefined
   return value as string[];
 }
 
+function parsePositiveInteger(value: unknown, field: string, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    throw new Error(`Invalid agent config: ${field} must be an integer in ${min}..${max}`);
+  }
+  return value;
+}
+
+function parseNonNegativeNumber(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error(`Invalid agent config: ${field} must be a non-negative number`);
+  }
+  return value;
+}
+
+function parsePolicy(value: unknown, id: string): AgentExecutionPolicy | undefined {
+  if (value === undefined) return undefined;
+  if (!isObject(value)) throw new Error(`Invalid agent config: ${id}.policy must be an object`);
+  const retry = value.retry;
+  const rateLimit = value.rateLimit;
+  const quota = value.quota;
+  const cost = value.cost;
+  if (retry !== undefined && !isObject(retry)) throw new Error(`Invalid agent config: ${id}.policy.retry`);
+  if (rateLimit !== undefined && !isObject(rateLimit)) throw new Error(`Invalid agent config: ${id}.policy.rateLimit`);
+  if (quota !== undefined && !isObject(quota)) throw new Error(`Invalid agent config: ${id}.policy.quota`);
+  if (cost !== undefined && !isObject(cost)) throw new Error(`Invalid agent config: ${id}.policy.cost`);
+  const parsedRetry = retry === undefined ? undefined : {
+    maxAttempts: parsePositiveInteger(retry.maxAttempts, `${id}.policy.retry.maxAttempts`, 1, 5),
+    ...(retry.backoffMs === undefined ? {} : { backoffMs: parsePositiveInteger(retry.backoffMs, `${id}.policy.retry.backoffMs`, 0, 60_000) }),
+  };
+  const parsedRateLimit = rateLimit === undefined ? undefined : {
+    maxRequests: parsePositiveInteger(rateLimit.maxRequests, `${id}.policy.rateLimit.maxRequests`, 1, 10_000),
+    windowMs: parsePositiveInteger(rateLimit.windowMs, `${id}.policy.rateLimit.windowMs`, 1_000, 86_400_000),
+  };
+  const parsedQuota = quota === undefined ? undefined : {
+    ...(quota.maxCallsPerDay === undefined ? {} : { maxCallsPerDay: parsePositiveInteger(quota.maxCallsPerDay, `${id}.policy.quota.maxCallsPerDay`, 1, 10_000_000) }),
+    ...(quota.maxTokensPerDay === undefined ? {} : { maxTokensPerDay: parsePositiveInteger(quota.maxTokensPerDay, `${id}.policy.quota.maxTokensPerDay`, 1, 10_000_000_000) }),
+  };
+  const parsedCost = cost === undefined ? undefined : {
+    ...(cost.inputPerMillion === undefined ? {} : { inputPerMillion: parseNonNegativeNumber(cost.inputPerMillion, `${id}.policy.cost.inputPerMillion`) }),
+    ...(cost.outputPerMillion === undefined ? {} : { outputPerMillion: parseNonNegativeNumber(cost.outputPerMillion, `${id}.policy.cost.outputPerMillion`) }),
+    ...(cost.currency === undefined ? {} : { currency: expectIdentifier(cost.currency, `${id}.policy.cost.currency`, /^[A-Z]{3}$/) }),
+  };
+  return {
+    ...(parsedRetry ? { retry: parsedRetry } : {}),
+    ...(parsedRateLimit ? { rateLimit: parsedRateLimit } : {}),
+    ...(parsedQuota && Object.keys(parsedQuota).length ? { quota: parsedQuota } : {}),
+    ...(parsedCost && Object.keys(parsedCost).length ? { cost: parsedCost } : {}),
+  };
+}
+
 function parseManifest(value: unknown, index: number): AgentManifest {
   if (!isObject(value)) throw new Error(`Invalid agent config: agents[${index}] must be an object`);
   const id = expectIdentifier(value.id, `agents[${index}].id`);
@@ -129,6 +210,7 @@ function parseManifest(value: unknown, index: number): AgentManifest {
   const kind = value.kind;
   if (kind !== 'http' && kind !== 'python' && kind !== 'mcp') throw new Error(`Invalid agent config: ${id}.kind`);
   if (!isObject(value.config)) throw new Error(`Invalid agent config: ${id}.config`);
+  const policy = parsePolicy(value.policy, id);
   const common = {
     id,
     toolName,
@@ -136,6 +218,7 @@ function parseManifest(value: unknown, index: number): AgentManifest {
     kind,
     inputSchema: parseSchema(value.inputSchema, id),
     ...(parseCredentials(value.credentials, id) ? { credentials: parseCredentials(value.credentials, id) } : {}),
+    ...(policy && Object.keys(policy).length ? { policy } : {}),
     ...(value.timeoutMs === undefined ? {} : {
       timeoutMs: typeof value.timeoutMs === 'number' && Number.isInteger(value.timeoutMs) && value.timeoutMs >= 1_000 && value.timeoutMs <= 300_000
         ? value.timeoutMs

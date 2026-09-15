@@ -24,6 +24,13 @@ test('parseArgs requires both session id and workspace root', () => {
   assert.throws(() => parseArgs([]), /required/);
 });
 
+test('parseArgs keeps Control Center manifest and vault options explicit', () => {
+  const config = parseArgs(['--session-id', 's1', '--workspace-root', '/tmp/ws', '--agents-config', '/tmp/agents.json', '--secret-store', '/tmp/secrets.enc.json', '--master-key-env', 'TEST_MASTER_KEY']);
+  assert.equal(config.agentsConfigPath, '/tmp/agents.json');
+  assert.equal(config.secretStorePath, '/tmp/secrets.enc.json');
+  assert.equal(config.masterKeyEnv, 'TEST_MASTER_KEY');
+});
+
 test('the host context matches the base SessionToolContext slice', () => {
   const host = createHostContext({ sessionId: 's1', workspaceRootPath: '/tmp/ws' });
   assert.equal(host.sessionId, 's1');

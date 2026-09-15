@@ -24,6 +24,8 @@
 - **统一执行适配**：`agent-runtime.ts` 适配 HTTP、Python、MCP 三类 Agent；HTTP 内置通用、Dify 与 Coze 工作流载荷模式，Python/MCP 均禁止 shell。
 - **密钥不落库**：运行时经 `CredentialReader` 获取引用，嵌入 Craft 时可复用其 Credential Manager；Python/MCP 子进程只拿到本 Agent 已声明的凭据别名。
 - **隐私友好的用量账本**：每次执行记录 Agent 标识、类型、时长、成功/失败、输入/输出字节数及上游可选 token 数；不保存提示词、结果正文、端点或密钥。独立 MCP 服务默认写到 Workspace 的 `.agent-workbench/usage.jsonl`。
+- **本地控制中心**：提供仅绑定回环地址的 Agent Control Center，可编辑和校验 Manifest、管理 AES-256-GCM 加密的本地 Key 引用、检查配置完整性，并展示调用、失败、时延、Token 和按配置规则估算的成本；页面不回显 Key。
+- **执行策略**：每个 Agent 可配置有限次数重试、指数退避、滑动窗口限流以及日调用 / Token 配额。策略在运行时执行，持久化用量账本用于重启后的配额判断。
 - **任务与访问边界**：每个任务独占 `inputs/`、`outputs/`、`tmp/`；路径越界被拒绝。账号冻结会使已签发凭据失效、关闭长连接、清理授权缓存并在调用前复核状态。
 - **MCP 双向接线**：同一注册表既可被宿主进程直接调用，也可通过 stdio MCP 服务对外暴露；工作台还能以 MCP Client 调用其他 Agent。
 
@@ -48,13 +50,33 @@ cd business/agent-workbench
 npm run serve:mcp -- --session-id demo-1 --workspace-root /absolute/path/to/workspace --agents-config /safe/path/agents.json
 ```
 
-不带 `--agents-config` 时，服务仍提供仓库内五个示例工具；带 Manifest 可选择 `includeBuiltinAgents: false`，只暴露你的业务 Agent。当前测试为 70 个用例，覆盖注册、三类 Agent 适配、凭据缺失、用量脱敏、MCP 调用、任务隔离、降级和访问撤销。
+不带 `--agents-config` 时，服务仍提供仓库内五个示例工具；带 Manifest 可选择 `includeBuiltinAgents: false`，只暴露你的业务 Agent。当前测试为 78 个用例，覆盖注册、三类 Agent 适配、凭据缺失、加密密钥库、控制中心、重试/限流/配额、用量脱敏、MCP 调用、任务隔离、降级和访问撤销。
+
+### 启动本地控制中心
+
+控制中心默认只监听 `127.0.0.1:4318`，管理状态位于指定 Workspace 的 `.agent-workbench/`。先生成并妥善保管一个 32 字节 Base64 主密钥；它不应写入配置文件或提交到仓库。
+
+```powershell
+$env:AGENT_WORKBENCH_MASTER_KEY = node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
+cd business/agent-workbench
+npm run serve:control -- --workspace-root D:\safe\agent-workspace
+```
+
+打开 `http://127.0.0.1:4318` 后可粘贴或编辑 Manifest、设置 Dify / Fish / Coze 等的地址和 Key 引用值、配置重试/限流/配额/价格规则，并运行“配置完整性检查”。该检查不会自动请求第三方供应商。
+
+让 MCP Server 读取同一份 Manifest 与加密 Key 库：
+
+```powershell
+npm run serve:mcp -- --session-id demo-1 --workspace-root D:\safe\agent-workspace --agents-config D:\safe\agent-workspace\.agent-workbench\agents.json --secret-store D:\safe\agent-workspace\.agent-workbench\secrets.enc.json
+```
+
+控制中心更新 Manifest 后，MCP Server 在下一次 `tools/list` 或 `tools/call` 时重新加载配置；Key 库同样按每次调用读取，不需要重启服务。
 
 ## 当前边界
 
-- 已实现的是业务层与可运行的 MCP 适配，尚未在 Craft 原生 UI 增加“可视化配置 Agent / 用量看板”页面；当前配置入口为受控 JSON Manifest 和宿主的凭据管理能力。
-- Dify、Coze、Fish 等仅提供协议适配和脱敏示例，不包含真实工作流、账户、端点、素材或已验证的生产连通性。
-- 用量账本提供调用与 token 聚合的基础数据；成本换算、租户配额、账单和监控告警需要结合所选模型供应商和部署环境继续建设。
+- 控制中心是独立的本地页面，刻意不修改 Craft 原生 UI；若要嵌入 Craft 的桌面端 / Web 端，需要额外修改上游 `apps/` 并重新界定维护边界。
+- Dify、Coze、Fish 等仅提供协议适配、配置入口和本地配置完整性检查，不包含真实工作流、账户、端点、素材或已验证的生产连通性。
+- 用量账本提供调用与 token 聚合、基础成本估算、重试/限流/日配额规则；多租户计费、供应商价格同步、分布式限流和告警仍需结合部署环境继续建设。
 - 本仓库提供代码与测试级验证，不主张生产规模、业务指标、自研大模型或 Craft 底座本身的能力归属。
 
 ## 目录

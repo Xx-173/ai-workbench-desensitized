@@ -27,11 +27,33 @@
 
 `config/agents.example.json` 是不含真实值的模板，演示视频、Fish 兼容音色、Python 清洗、Dify 文案和外部 MCP Agent。Coze 可使用 `coze-workflow` 载荷；任何支持 HTTP JSON 的框架也可以使用通用 `input` 载荷。
 
+每个 Manifest 可带 `policy`：`retry`（最多 5 次、指数退避）、`rateLimit`（滑动窗口）、`quota`（每日调用 / Token）和 `cost`（每百万 Token 的估算价格）。策略由运行时执行；用量 JSONL 为日配额和看板提供持久化事实。
+
 ## 用量与隐私
 
 `usage-ledger.ts` 记录的是：Agent 标识、类型、时间、耗时、成功/失败、输入/输出字节数，以及上游响应中的可选 token 数。不会记录 prompts、结果正文、URL、API Key 或账户标识。
 
 独立 MCP 服务会把账本写在 `<workspace>/.agent-workbench/usage.jsonl`。嵌入 Craft 时，宿主可将自己的 `UsageRecorder` 传入运行时并同步到其监控或数据库；成本与配额规则仍应由部署方基于实际供应商价格实现。
+
+## 本地 Control Center
+
+`adapter/control-center-server.ts` 提供本地 Web 控制台，默认监听 `127.0.0.1:4318`。它管理独立的 Manifest JSON 和 `secrets.enc.json`：后者通过 `AGENT_WORKBENCH_MASTER_KEY` 使用 AES-256-GCM 加密，页面只显示引用名和“已配置”状态，不会回显值。
+
+```powershell
+$env:AGENT_WORKBENCH_MASTER_KEY = node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
+cd business/agent-workbench
+npm run serve:control -- --workspace-root D:\safe\agent-workspace
+```
+
+控制中心提供：Manifest 编辑/校验、Dify / Fish / Coze 等配置引用录入、配置完整性检查、重试/限流/配额/成本策略编辑，以及无原文用量看板。其健康检查只核验本地配置与引用完整性，不会在没有明确用户操作的情况下向第三方发送请求。
+
+将 MCP Server 指向同一状态目录：
+
+```powershell
+npm run serve:mcp -- --session-id demo-1 --workspace-root D:\safe\agent-workspace --agents-config D:\safe\agent-workspace\.agent-workbench\agents.json --secret-store D:\safe\agent-workspace\.agent-workbench\secrets.enc.json
+```
+
+MCP Server 在每次 `tools/list` / `tools/call` 时读取最新 Manifest，在调用时读取 Key 库，因此控制中心的更新无需重启 MCP Server。
 
 ## 运行
 
@@ -53,6 +75,9 @@ npm run serve:mcp -- --session-id demo-1 --workspace-root /absolute/path/to/work
 | `src/agent-manifest.ts` | 解析和校验管理员控制的 Agent 配置 |
 | `src/agent-runtime.ts` | HTTP、Python、MCP 执行适配与显式凭据注入 |
 | `src/usage-ledger.ts` | 无原文的调用统计、内存与 JSONL 实现 |
+| `src/secret-vault.ts` | AES-256-GCM 本地密钥库；仅返回配置状态 |
+| `src/control-plane.ts` | Manifest、密钥状态与用量/成本看板的控制面 |
+| `src/execution-governor.ts` | 重试、限流、日调用 / Token 配额执行器 |
 | `src/capability-registry.ts` | 工具发现、输入校验和统一调用面 |
 | `src/capabilities.ts` | 音色、视频、清洗、质检、文案五个示例实现 |
 | `src/task-workspace.ts` | 任务级 `inputs/outputs/tmp` 隔离与路径防穿越 |
@@ -60,7 +85,7 @@ npm run serve:mcp -- --session-id demo-1 --workspace-root /absolute/path/to/work
 | `adapter/mcp-server.ts` | stdio MCP Server 与 Manifest 装载 |
 | `adapter/session-context-bridge.ts` | Craft Session / Credential Manager 的窄适配 |
 
-测试使用合成数据，不连接真实服务。目前 70 个测试覆盖 Manifest 校验、三种接入形态、凭据缺失、使用量脱敏、MCP、任务隔离、章节降级和上游契约。
+测试使用合成数据，不连接真实服务。目前 78 个测试覆盖 Manifest 校验、三种接入形态、凭据缺失、加密密钥库、控制中心、重试/限流/配额、使用量脱敏、MCP、任务隔离、章节降级和上游契约。
 
 ## 脱敏与许可证
 

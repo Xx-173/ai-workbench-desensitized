@@ -17,6 +17,9 @@ export * from './remote.ts';
 export * from './agent-manifest.ts';
 export * from './agent-runtime.ts';
 export * from './usage-ledger.ts';
+export * from './execution-governor.ts';
+export * from './secret-vault.ts';
+export * from './control-plane.ts';
 
 import { CapabilityRegistry } from './capability-registry.ts';
 import { capabilities } from './capabilities.ts';
