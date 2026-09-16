@@ -45,7 +45,7 @@ npm test
 
 复制 [`config/agents.example.json`](business/agent-workbench/config/agents.example.json) 到仓库外的受控路径，按你的密钥管理方案填入**引用名或部署配置**，不要提交实际 Key。示例含视频解析、Fish 兼容音色、Python 话术清洗、Dify 文案和外部 MCP Agent。
 
-管理员可以在 Craft 的“AI 工作台 → Agent 配置”内加密录入 `DIFY_API_KEY`、`FISH_API_KEY` 等下游 Agent 凭据，再在 Manifest 中只引用其名称。组织默认聊天模型及其 Key 则由管理员在 Craft“设置 → AI”中配置；成员只接收该默认模型的只读信息，不能改写连接或模型。若要限定某项能力的部门或角色，在 Agent 项目中声明：
+管理员在 Craft 的“AI 工作台 → 管理设置”中统一维护公司默认聊天模型和下游 Agent 凭据：聊天模型保存为 Craft 的服务端默认连接，Dify / Fish / HTTP Agent 等地址与 Key 保存进加密凭证库；员工既看不到 Key，也不能选择供应商或改写默认模型。新增 Dify、HTTP、Python 或 MCP Agent 可通过表单完成，复杂限流、权限或输入结构才需要展开高级 Manifest。Dify 工作流需要在对应 Dify 应用的“API 访问”创建应用 API Key（通常以 `app-` 开头）以及 Dify 服务域名；本项目会向该域名的 `/v1/workflows/run` 发起调用。若要限定某项能力的部门或角色，在 Agent 项目中声明：
 
 ```json
 "access": {

@@ -537,6 +537,9 @@ function AppShellContent({
 
   const { t } = useTranslation()
   const isOrganizationMember = isOrganizationWebUI && organizationRole !== 'admin'
+  // The company shell uses task states and projects, not Craft's personal
+  // label taxonomy. Keep labels out of every filter surface for both roles.
+  const hideOrganizationLabels = isOrganizationWebUI
 
   // Get hotkey labels from centralized action registry
   const newChatHotkey = useActionLabel('app.newChat').hotkey
@@ -1136,9 +1139,9 @@ function AppShellContent({
     if (!filterDropdownQuery.trim()) return { states: [] as SessionStatus[], labels: [] as LabelMenuItem[] }
     return {
       states: filterLabelMenuStates(effectiveSessionStatuses, filterDropdownQuery),
-      labels: filterLabelMenuItems(flatLabelMenuItems, filterDropdownQuery),
+      labels: hideOrganizationLabels ? [] : filterLabelMenuItems(flatLabelMenuItems, filterDropdownQuery),
     }
-  }, [filterDropdownQuery, effectiveSessionStatuses, flatLabelMenuItems])
+  }, [filterDropdownQuery, effectiveSessionStatuses, flatLabelMenuItems, hideOrganizationLabels])
 
   // Reset selected index when query changes
   React.useEffect(() => {
@@ -3144,8 +3147,8 @@ function AppShellContent({
                               </StyledDropdownMenuSubContent>
                             </DropdownMenuSub>
 
-                            {/* Labels submenu - hierarchical tree with recursive submenus */}
-                            <DropdownMenuSub>
+                            {/* Labels are a personal Craft feature; organization mode uses task states and projects. */}
+                            {!hideOrganizationLabels && <DropdownMenuSub>
                               <StyledDropdownMenuSubTrigger>
                                 <Tag className="h-3.5 w-3.5" />
                                 <span className="flex-1">{t("sidebar.labels")}</span>
@@ -3165,7 +3168,7 @@ function AppShellContent({
                                   />
                                 )}
                               </StyledDropdownMenuSubContent>
-                            </DropdownMenuSub>
+                            </DropdownMenuSub>}
 
                             {/* Projects submenu - flat list of workspace projects */}
                             {projectMenuOptions.length > 0 && (

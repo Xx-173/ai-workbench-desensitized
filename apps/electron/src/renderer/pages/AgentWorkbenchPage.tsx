@@ -1,7 +1,7 @@
 /** Native Craft panel for the authenticated multi-Agent workbench. */
 
 import { useEffect, useMemo, useState } from 'react'
-import { Bot, Building2, KeyRound, Play, RefreshCw, ShieldCheck, Users } from 'lucide-react'
+import { Bot, Building2, ChevronDown, KeyRound, Play, Plus, RefreshCw, ShieldCheck, Users } from 'lucide-react'
 
 type Identity = { userId: string; username: string; displayName: string; departmentId: string; role: 'admin' | 'member' }
 type AgentField = { type: string; description: string; enum?: string[] }
@@ -11,6 +11,8 @@ type User = { id: string; username: string; displayName: string; departmentId: s
 type Usage = { calls: number; successes: number; failures: number; durationMs: number; inputTokens: number; outputTokens: number }
 type UsageRow = Usage & { id: string; name: string }
 type Bootstrap = { identity: Identity; agents: Agent[]; ownUsage: Usage & { byAgent?: UsageRow[] }; departments?: Department[]; users?: User[]; teamUsage?: { total: Usage; byDepartment: UsageRow[]; byUser: UsageRow[]; byAgent: UsageRow[] } }
+type WorkbenchConfig = { includeBuiltinAgents?: boolean; agents: Array<Record<string, unknown>> }
+type AgentKindPreset = 'dify' | 'http' | 'python' | 'mcp'
 
 type Tab = 'run' | 'usage' | 'team' | 'config'
 
@@ -66,6 +68,15 @@ function agentName(agent: Agent): string {
   return names[agent.id] ?? agent.id.replace(/[-_]/g, ' ')
 }
 
+function makeAgentId(value: string): string {
+  const result = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+  return result || `agent-${Date.now()}`
+}
+
+function credentialPrefix(id: string): string {
+  return id.toUpperCase().replace(/-/g, '_').replace(/[^A-Z0-9_]/g, '')
+}
+
 function UsageRows({ rows, empty }: { rows: UsageRow[] | undefined; empty: string }) {
   if (!rows?.length) return <p className="mt-3 rounded-md bg-muted/50 p-3 text-sm text-muted-foreground">{empty}</p>
   return <div className="mt-3 overflow-auto"><table className="w-full min-w-[670px] text-left text-sm"><thead className="border-b text-xs text-muted-foreground"><tr><th className="p-2">对象</th><th className="p-2">调用</th><th className="p-2">成功 / 失败</th><th className="p-2">输入 Token</th><th className="p-2">输出 Token</th><th className="p-2">耗时</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id} className="border-b border-border/50"><td className="p-2 font-medium">{row.name}</td><td className="p-2">{row.calls}</td><td className="p-2">{row.successes} / {row.failures}</td><td className="p-2">{row.inputTokens}</td><td className="p-2">{row.outputTokens}</td><td className="p-2">{Math.round(row.durationMs / 1000)}s</td></tr>)}</tbody></table></div>
@@ -83,6 +94,9 @@ export default function AgentWorkbenchPage() {
   const [departmentName, setDepartmentName] = useState('')
   const [newUser, setNewUser] = useState({ username: '', displayName: '', password: '', departmentId: '', role: 'member' })
   const [newSecret, setNewSecret] = useState({ name: '', value: '' })
+  const [chatConnection, setChatConnection] = useState({ provider: 'openai-compatible', endpoint: '', apiKey: '', model: '' })
+  const [quickAgent, setQuickAgent] = useState({ name: '', description: '', kind: 'dify' as AgentKindPreset, endpoint: '', apiKey: '', scriptOrCommand: '' })
+  const [advancedOpen, setAdvancedOpen] = useState(false)
 
   const selectedAgent = useMemo(() => data?.agents.find((agent) => agent.id === selectedAgentId), [data, selectedAgentId])
 
@@ -156,6 +170,66 @@ export default function AgentWorkbenchPage() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }
 
+  const saveCompanyChatModel = async () => {
+    const apiKey = chatConnection.apiKey.trim()
+    const endpoint = chatConnection.endpoint.trim().replace(/\/$/, '')
+    const model = chatConnection.model.trim()
+    if (!apiKey || !model) {
+      setError('请填写公司聊天模型的 API Key 和默认模型。')
+      return
+    }
+    if (!window.electronAPI) {
+      setError('当前浏览器连接未就绪，请刷新后重试。')
+      return
+    }
+    setBusy(true); setError('')
+    try {
+      const isAnthropic = chatConnection.provider === 'anthropic'
+      const result = await window.electronAPI.setupLlmConnection({
+        slug: 'team-default', credential: apiKey, defaultModel: model, models: [model],
+        ...(endpoint ? { baseUrl: endpoint } : {}),
+        ...(isAnthropic ? { piAuthProvider: 'anthropic' } : { piAuthProvider: 'openai', customEndpoint: { api: 'openai-completions' } }),
+      })
+      if (!result.success) throw new Error(result.error ?? '公司聊天模型保存失败')
+      const defaultResult = await window.electronAPI.setDefaultLlmConnection('team-default')
+      if (!defaultResult.success) throw new Error(defaultResult.error ?? '默认模型设置失败')
+      setChatConnection((current) => ({ ...current, apiKey: '' }))
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+    finally { setBusy(false) }
+  }
+
+  const addQuickAgent = async () => {
+    const name = quickAgent.name.trim()
+    const endpoint = quickAgent.endpoint.trim().replace(/\/$/, '')
+    if (!name) { setError('请填写 Agent 名称。'); return }
+    if ((quickAgent.kind === 'dify' || quickAgent.kind === 'http') && !endpoint) { setError('请填写 Agent 服务地址。'); return }
+    if ((quickAgent.kind === 'python' || quickAgent.kind === 'mcp') && !quickAgent.scriptOrCommand.trim()) { setError('请填写脚本或 MCP 启动命令。'); return }
+    try {
+      const current = JSON.parse(config || '{"agents":[]}') as WorkbenchConfig
+      const id = makeAgentId(name)
+      if (current.agents.some((agent) => agent.id === id)) throw new Error(`已存在同名 Agent：${id}`)
+      const prefix = credentialPrefix(id)
+      const common = {
+        id, toolName: `run_${id.replace(/-/g, '_')}`, description: quickAgent.description.trim() || `${name} 业务 Agent`,
+        inputSchema: { type: 'object', properties: { task: { type: 'string', description: '任务描述或待处理内容' } }, required: ['task'] },
+      }
+      const agent = quickAgent.kind === 'dify'
+        ? { ...common, kind: 'http', config: { baseUrlEnv: `${prefix}_BASE_URL`, tokenEnv: `${prefix}_API_KEY`, path: '/v1/workflows/run', payloadMode: 'dify-workflow' } }
+        : quickAgent.kind === 'http'
+          ? { ...common, kind: 'http', config: { baseUrlEnv: `${prefix}_BASE_URL`, tokenEnv: `${prefix}_API_KEY`, path: '/v1/run', payloadMode: 'input' } }
+          : quickAgent.kind === 'python'
+            ? { ...common, kind: 'python', config: { command: quickAgent.scriptOrCommand.trim().split(/\s+/)[0], args: quickAgent.scriptOrCommand.trim().split(/\s+/).slice(1) } }
+            : { ...common, kind: 'mcp', config: { command: quickAgent.scriptOrCommand.trim().split(/\s+/)[0], args: quickAgent.scriptOrCommand.trim().split(/\s+/).slice(1), toolName: 'run_task' } }
+      const next = { ...current, agents: [...current.agents, agent] }
+      await api('/api/workbench/config', { method: 'PUT', body: JSON.stringify(next) })
+      if (endpoint) await api('/api/workbench/secrets', { method: 'POST', body: JSON.stringify({ name: `${prefix}_BASE_URL`, value: endpoint }) })
+      if (quickAgent.apiKey.trim()) await api('/api/workbench/secrets', { method: 'POST', body: JSON.stringify({ name: `${prefix}_API_KEY`, value: quickAgent.apiKey.trim() }) })
+      setConfig(JSON.stringify(next, null, 2))
+      setQuickAgent({ name: '', description: '', kind: 'dify', endpoint: '', apiKey: '', scriptOrCommand: '' })
+      await load()
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+  }
+
   if (!data && !error) return <div className="h-full grid place-items-center text-sm text-muted-foreground">正在连接 AI 工作台…</div>
   if (!data) return <div className="h-full grid place-items-center p-8 text-center"><div><p className="font-medium">AI 工作台未启用</p><p className="mt-2 max-w-lg text-sm text-muted-foreground">{error}。请由服务器管理员启用 CRAFT_TEAM_MODE，并用浏览器打开 Craft WebUI。</p><button className="mt-4 rounded-md border px-3 py-1.5 text-sm" onClick={() => void load()}>重试</button></div></div>
 
@@ -171,7 +245,7 @@ export default function AgentWorkbenchPage() {
         <button onClick={() => setTab('run')} className={`rounded-md px-3 py-1.5 text-sm ${tab === 'run' ? 'bg-foreground text-background' : 'hover:bg-muted'}`}><Play className="mr-1 inline h-3.5 w-3.5" />运行 Agent</button>
         <button onClick={() => setTab('usage')} className={`rounded-md px-3 py-1.5 text-sm ${tab === 'usage' ? 'bg-foreground text-background' : 'hover:bg-muted'}`}>我的用量</button>
         {isAdmin && <button onClick={() => setTab('team')} className={`rounded-md px-3 py-1.5 text-sm ${tab === 'team' ? 'bg-foreground text-background' : 'hover:bg-muted'}`}><Users className="mr-1 inline h-3.5 w-3.5" />团队与用量</button>}
-        {isAdmin && <button onClick={() => { void loadConfig() }} className={`rounded-md px-3 py-1.5 text-sm ${tab === 'config' ? 'bg-foreground text-background' : 'hover:bg-muted'}`}><KeyRound className="mr-1 inline h-3.5 w-3.5" />Agent 配置</button>}
+        {isAdmin && <button onClick={() => { void loadConfig() }} className={`rounded-md px-3 py-1.5 text-sm ${tab === 'config' ? 'bg-foreground text-background' : 'hover:bg-muted'}`}><KeyRound className="mr-1 inline h-3.5 w-3.5" />管理设置</button>}
       </div>
       {error && <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
 
@@ -191,7 +265,14 @@ export default function AgentWorkbenchPage() {
         <div className="grid gap-5 xl:grid-cols-2"><section className="rounded-xl border bg-card p-4"><h2 className="font-medium">按部门用量</h2><UsageRows rows={usage?.byDepartment} empty="尚无部门调用记录。" /></section><section className="rounded-xl border bg-card p-4"><h2 className="font-medium">按 Agent 用量</h2><UsageRows rows={usage?.byAgent} empty="尚无 Agent 调用记录。" /></section></div>
       </section>}
 
-      {tab === 'config' && isAdmin && <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_330px]"><div className="rounded-xl border bg-card p-4"><h2 className="font-medium">Agent Manifest</h2><p className="mt-1 text-xs text-muted-foreground">在这里新增、编辑或删除 Agent。保存后，工作台和 MCP Server 会读取更新后的配置；真实密钥不要写进 JSON。可通过 access.departmentIds / access.roles 限定成员可见与可调用范围，服务端会再次校验。</p><textarea value={config} onChange={(event) => setConfig(event.target.value)} spellCheck={false} className="mt-3 min-h-[460px] w-full rounded-md border bg-background p-3 font-mono text-xs" /><button onClick={() => void saveConfig()} className="mt-3 rounded-md bg-foreground px-3 py-2 text-sm text-background">校验并保存</button></div><aside className="rounded-xl border bg-card p-4"><h2 className="font-medium">Agent Secret Store</h2><p className="mt-1 text-xs text-muted-foreground">在此配置 Dify、Fish、HTTP Agent 等下游连接所需 Key。组织默认聊天模型由管理员在 Craft“设置 → AI”中维护；普通成员只能读取默认模型，不能更改。所有值只加密存储在服务端，永不回显。</p><input value={newSecret.name} onChange={(event) => setNewSecret({ ...newSecret, name: event.target.value })} className="mt-3 w-full rounded-md border bg-background px-3 py-2 text-sm" placeholder="DIFY_API_KEY" /><input value={newSecret.value} onChange={(event) => setNewSecret({ ...newSecret, value: event.target.value })} type="password" className="mt-2 w-full rounded-md border bg-background px-3 py-2 text-sm" placeholder="粘贴密钥或地址" /><button onClick={() => void saveSecret()} className="mt-2 rounded-md border px-3 py-2 text-sm">加密保存</button></aside></section>}
+      {tab === 'config' && isAdmin && <section className="space-y-5">
+        <section className="rounded-xl border bg-card p-4"><h2 className="font-medium">公司聊天模型</h2><p className="mt-1 text-sm text-muted-foreground">这是员工在 Craft 对话入口中统一使用的默认模型。只由管理员维护；保存后会写入 Craft 服务端凭证和默认连接，员工不会看到 Key 或供应商选择。</p><div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4"><label className="text-sm font-medium">协议<select value={chatConnection.provider} onChange={(event) => setChatConnection({ ...chatConnection, provider: event.target.value })} className="mt-1.5 w-full rounded-md border bg-background px-3 py-2 text-sm"><option value="openai-compatible">OpenAI 兼容接口（含 Agnes 等网关）</option><option value="anthropic">Anthropic Messages</option></select></label><label className="text-sm font-medium">Endpoint<input value={chatConnection.endpoint} onChange={(event) => setChatConnection({ ...chatConnection, endpoint: event.target.value })} className="mt-1.5 w-full rounded-md border bg-background px-3 py-2 text-sm" placeholder="https://api.example.com/v1" /></label><label className="text-sm font-medium">默认模型<input value={chatConnection.model} onChange={(event) => setChatConnection({ ...chatConnection, model: event.target.value })} className="mt-1.5 w-full rounded-md border bg-background px-3 py-2 text-sm" placeholder="例如 gpt-4.1-mini" /></label><label className="text-sm font-medium">API Key<input value={chatConnection.apiKey} onChange={(event) => setChatConnection({ ...chatConnection, apiKey: event.target.value })} type="password" autoComplete="new-password" className="mt-1.5 w-full rounded-md border bg-background px-3 py-2 text-sm" placeholder="仅保存一次，不会回显" /></label></div><button disabled={busy} onClick={() => void saveCompanyChatModel()} className="mt-4 rounded-md bg-foreground px-3 py-2 text-sm text-background disabled:opacity-50">保存公司默认模型</button></section>
+
+        <div className="grid gap-5 xl:grid-cols-2"><section className="rounded-xl border bg-card p-4"><h2 className="font-medium">快速接入 Agent</h2><p className="mt-1 text-sm text-muted-foreground">不需要编辑 JSON。选择接入类型，填服务链接和 Key；系统会生成受管 Agent、加密保存连接信息，并记录调用用量。</p><div className="mt-4 grid gap-3 sm:grid-cols-2"><input value={quickAgent.name} onChange={(event) => setQuickAgent({ ...quickAgent, name: event.target.value })} className="rounded-md border bg-background px-3 py-2 text-sm" placeholder="Agent 名称，例如课程文案" /><select value={quickAgent.kind} onChange={(event) => setQuickAgent({ ...quickAgent, kind: event.target.value as AgentKindPreset })} className="rounded-md border bg-background px-3 py-2 text-sm"><option value="dify">Dify 工作流</option><option value="http">HTTP / 自建 Agent</option><option value="python">Python 脚本</option><option value="mcp">MCP Agent</option></select><input value={quickAgent.description} onChange={(event) => setQuickAgent({ ...quickAgent, description: event.target.value })} className="sm:col-span-2 rounded-md border bg-background px-3 py-2 text-sm" placeholder="业务说明（员工可见）" />{quickAgent.kind === 'dify' || quickAgent.kind === 'http' ? <><input value={quickAgent.endpoint} onChange={(event) => setQuickAgent({ ...quickAgent, endpoint: event.target.value })} className="rounded-md border bg-background px-3 py-2 text-sm" placeholder={quickAgent.kind === 'dify' ? 'Dify 地址，例如 https://dify.company.com' : 'Agent 服务地址'} /><input value={quickAgent.apiKey} onChange={(event) => setQuickAgent({ ...quickAgent, apiKey: event.target.value })} type="password" autoComplete="new-password" className="rounded-md border bg-background px-3 py-2 text-sm" placeholder={quickAgent.kind === 'dify' ? 'Dify 应用 API Key（app-…）' : 'Agent API Key（可留空）'} /></> : <input value={quickAgent.scriptOrCommand} onChange={(event) => setQuickAgent({ ...quickAgent, scriptOrCommand: event.target.value })} className="sm:col-span-2 rounded-md border bg-background px-3 py-2 text-sm" placeholder={quickAgent.kind === 'python' ? '例如 python /opt/agents/clean.py' : '例如 node /opt/agents/server.mjs'} />}</div><button onClick={() => void addQuickAgent()} className="mt-4 inline-flex items-center gap-2 rounded-md bg-foreground px-3 py-2 text-sm text-background"><Plus className="h-4 w-4" />发布 Agent</button></section>
+        <aside className="rounded-xl border bg-card p-4"><h2 className="font-medium">受管凭证库</h2><p className="mt-1 text-sm text-muted-foreground">用于补充已有 Agent 的地址或 Key。密钥仅加密写入服务器，保存后只显示“已配置”，无法回显。</p><input value={newSecret.name} onChange={(event) => setNewSecret({ ...newSecret, name: event.target.value })} className="mt-4 w-full rounded-md border bg-background px-3 py-2 text-sm" placeholder="例如 DIFY_API_KEY" /><input value={newSecret.value} onChange={(event) => setNewSecret({ ...newSecret, value: event.target.value })} type="password" autoComplete="new-password" className="mt-2 w-full rounded-md border bg-background px-3 py-2 text-sm" placeholder="粘贴 Key 或地址" /><button onClick={() => void saveSecret()} className="mt-2 rounded-md border px-3 py-2 text-sm">加密保存</button><div className="mt-4 rounded-md bg-muted/60 p-3 text-xs text-muted-foreground"><strong className="text-foreground">Dify 要填什么？</strong><br />在 Dify 应用的“API 访问”创建应用 API Key（通常为 <code>app-…</code>），填写 Dify 域名为 Base URL。工作流接入会自动调用 <code>/v1/workflows/run</code>。</div></aside></div>
+
+        <details open={advancedOpen} onToggle={(event) => setAdvancedOpen((event.target as HTMLDetailsElement).open)} className="rounded-xl border bg-card p-4"><summary className="flex cursor-pointer list-none items-center justify-between font-medium">高级：编辑 Agent Manifest <ChevronDown className="h-4 w-4" /></summary><p className="mt-2 text-xs text-muted-foreground">仅用于复杂的输入字段、部门权限、限流或 MCP 工具名；真实密钥请始终存入上方凭证库。</p><textarea value={config} onChange={(event) => setConfig(event.target.value)} spellCheck={false} className="mt-3 min-h-[360px] w-full rounded-md border bg-background p-3 font-mono text-xs" /><button onClick={() => void saveConfig()} className="mt-3 rounded-md border px-3 py-2 text-sm">校验并保存高级配置</button></details>
+      </section>}
     </div>
   )
 }
