@@ -7,5 +7,5 @@
     "moduleResolution": "NodeNext",
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "adapter/**/*.ts"]
+  "include": ["src/**/*.ts", "adapter/**/*.ts", "scripts/**/*.ts"]
 }

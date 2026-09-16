@@ -17,6 +17,7 @@ import { systemClock } from './ports.ts';
 import { joinUrl, type FetchLike, MisconfiguredError } from './remote.ts';
 import { ExecutionGovernor, retryDelayMs } from './execution-governor.ts';
 import type { AgentUsageEvent, UsageReader, UsageRecorder } from './usage-ledger.ts';
+import { createCaseMemoryEntry, type CaseMemoryRecorder } from './case-memory.ts';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_PROCESS_OUTPUT_BYTES = 1_000_000;
@@ -37,6 +38,8 @@ export interface AgentRuntimeDependencies {
   readonly executeMcp?: AgentExecutor;
   readonly usageRecorder?: UsageRecorder;
   readonly usageReader?: UsageReader;
+  /** Content-free success/failure cases for operational runbooks. */
+  readonly caseMemory?: CaseMemoryRecorder;
   /** Supply one shared governor when creating registries repeatedly. */
   readonly governor?: ExecutionGovernor;
   readonly clock?: Clock;
@@ -119,6 +122,14 @@ function safeChildEnvironment(credentials: Readonly<Record<string, string>>): No
 
 function sleep(ms: number): Promise<void> {
   return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
+
+function failureStrategy(error: unknown): { readonly category: string; readonly strategy: string } {
+  if (error instanceof MisconfiguredError) return { category: 'missing-configuration', strategy: 'request-admin-configure-credential' };
+  if (error instanceof Error && error.name === 'RateLimitExceededError') return { category: 'rate-limited', strategy: 'wait-for-rate-limit-window' };
+  if (error instanceof Error && error.name === 'QuotaExceededError') return { category: 'quota-exhausted', strategy: 'wait-for-quota-reset' };
+  if (error instanceof Error && /timed out/i.test(error.message)) return { category: 'timeout', strategy: 'retry-or-lower-workload' };
+  return { category: 'upstream-or-runtime-error', strategy: 'inspect-redacted-upstream-error' };
 }
 
 async function executeJsonProcess(config: PythonAgentConfig, request: AgentExecutionRequest): Promise<JsonValue> {
@@ -244,6 +255,23 @@ export function createAgentEntries(
           ...(ctx.actor?.departmentId ? { departmentId: ctx.actor.departmentId } : {}),
         };
         await dependencies.usageRecorder?.record(event);
+        const failure = error === undefined ? undefined : failureStrategy(error);
+        try {
+          await dependencies.caseMemory?.record(createCaseMemoryEntry({
+            agentId: manifest.id,
+            occurredAt: event.occurredAt,
+            outcome: error === undefined ? 'success' : 'failure',
+            input,
+            inputBytes: event.inputBytes,
+            outputBytes: event.outputBytes,
+            durationMs,
+            attempts,
+            strategy: failure?.strategy ?? 'cache-successful-invocation-metadata',
+            ...(failure ? { failureCategory: failure.category } : {}),
+          }));
+        } catch {
+          // Observability must not turn a successful customer request into an error.
+        }
       }
     },
   }));

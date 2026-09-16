@@ -18,13 +18,14 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Clock } from './ports.ts';
 import { systemClock } from './ports.ts';
 
-export type AccountStatus = 'active' | 'frozen';
+/** Kept distinct from the team-directory's active/disabled account state. */
+export type RevocationAccountStatus = 'active' | 'frozen';
 
 export interface AccountRecord {
   readonly id: string;
   /** Display handle. Never carries a real person's identity in fixtures. */
   readonly login: string;
-  readonly status: AccountStatus;
+  readonly status: RevocationAccountStatus;
   /** Monotonically increasing. Every status transition bumps it. */
   readonly statusVersion: number;
   readonly frozenAt?: number;
@@ -137,7 +138,7 @@ export interface AuthorizerOptions {
 }
 
 interface CacheEntry {
-  readonly status: AccountStatus;
+  readonly status: RevocationAccountStatus;
   readonly statusVersion: number;
   readonly expiresAt: number;
 }

@@ -13,6 +13,7 @@ import { createWorkbenchRegistry } from '../src/index.ts';
 import { AgentControlPlane, FileManifestStore } from '../src/control-plane.ts';
 import { EncryptedFileSecretVault } from '../src/secret-vault.ts';
 import { JsonlUsageLedger, type AgentUsageEvent } from '../src/usage-ledger.ts';
+import { JsonlCaseMemory } from '../src/case-memory.ts';
 import { mapAgentResult } from '../src/result-mapper.ts';
 import { TeamDirectory, type AccountStatus, type TeamRole, type TeamUser } from '../src/team-directory.ts';
 import type { JsonObject, JsonValue, ToolContext } from '../src/ports.ts';
@@ -49,6 +50,8 @@ export interface TeamWorkbenchOptions {
   readonly secretStorePath?: string;
   readonly teamStorePath?: string;
   readonly usagePath?: string;
+  /** Optional content-free operational case memory path. */
+  readonly caseMemoryPath?: string;
 }
 
 export interface TeamAuthProvider {
@@ -189,6 +192,7 @@ class TeamWorkbenchApi implements WorkbenchHttpApi {
   private readonly plane: AgentControlPlane;
   private readonly vault: EncryptedFileSecretVault;
   private readonly usage: JsonlUsageLedger;
+  private readonly caseMemory: JsonlCaseMemory;
   private readonly workspaceRootPath: string;
 
   constructor(
@@ -196,12 +200,14 @@ class TeamWorkbenchApi implements WorkbenchHttpApi {
     plane: AgentControlPlane,
     vault: EncryptedFileSecretVault,
     usage: JsonlUsageLedger,
+    caseMemory: JsonlCaseMemory,
     workspaceRootPath: string,
   ) {
     this.directory = directory;
     this.plane = plane;
     this.vault = vault;
     this.usage = usage;
+    this.caseMemory = caseMemory;
     this.workspaceRootPath = workspaceRootPath;
   }
 
@@ -270,7 +276,7 @@ class TeamWorkbenchApi implements WorkbenchHttpApi {
     };
     const registry = createWorkbenchRegistry({
       agents: [agent], includeBuiltinAgents: false,
-      runtime: { usageRecorder: this.usage, usageReader: this.usage },
+      runtime: { usageRecorder: this.usage, usageReader: this.usage, caseMemory: this.caseMemory },
     });
     const result = await registry.invoke(agent.id, context, asJsonObject(body.input));
     const mapped = result.raw === undefined ? null : mapAgentResult(result.raw);
@@ -334,6 +340,7 @@ export async function createTeamWorkbenchRuntime(options: TeamWorkbenchOptions):
   } : undefined);
   const vault = await EncryptedFileSecretVault.open(options.secretStorePath ?? join(controlDir, 'secrets.enc.json'), options.masterKey);
   const usage = new JsonlUsageLedger(options.usagePath ?? join(controlDir, 'usage.jsonl'));
+  const caseMemory = new JsonlCaseMemory(options.caseMemoryPath ?? join(controlDir, 'case-memory.jsonl'));
   const plane = new AgentControlPlane(
     new FileManifestStore(options.manifestsPath ?? join(controlDir, 'agents.json')),
     vault,
@@ -341,6 +348,6 @@ export async function createTeamWorkbenchRuntime(options: TeamWorkbenchOptions):
   );
   return {
     authProvider: new DirectoryAuthProvider(directory, options.sessionSecret),
-    httpApi: new TeamWorkbenchApi(directory, plane, vault, usage, options.workspaceRootPath),
+    httpApi: new TeamWorkbenchApi(directory, plane, vault, usage, caseMemory, options.workspaceRootPath),
   };
 }

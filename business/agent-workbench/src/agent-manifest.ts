@@ -120,8 +120,8 @@ function parseSchema(value: unknown, id: string): InputSchema {
     }
     const type = field.type as 'string' | 'number' | 'boolean' | 'array';
     const description = typeof field.description === 'string' ? field.description : name;
-    const items = isObject(field.items) && (field.items.type === 'string' || field.items.type === 'number')
-      ? { type: field.items.type }
+    const items: { type: 'string' | 'number' } | undefined = isObject(field.items) && (field.items.type === 'string' || field.items.type === 'number')
+      ? { type: field.items.type as 'string' | 'number' }
       : undefined;
     properties[name] = { type, description, ...(items ? { items } : {}) };
   }
@@ -291,8 +291,11 @@ export function collectCredentialReferenceNames(manifests: readonly AgentManifes
   for (const manifest of manifests) {
     for (const binding of manifest.credentials ?? []) names.add(binding.source);
     if (manifest.kind === 'http') {
-      names.add(manifest.config.baseUrlEnv);
-      if (manifest.config.tokenEnv) names.add(manifest.config.tokenEnv);
+      // `AgentManifest` intentionally stores a union for config; kind is the
+      // validated discriminator at this boundary.
+      const config = manifest.config as HttpAgentConfig;
+      names.add(config.baseUrlEnv);
+      if (config.tokenEnv) names.add(config.tokenEnv);
     }
   }
   return [...names].sort();

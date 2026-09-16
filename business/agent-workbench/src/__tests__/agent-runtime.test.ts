@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { collectCredentialReferenceNames, parseAgentWorkbenchConfig, type AgentManifest } from '../agent-manifest.ts';
 import { createWorkbenchRegistry } from '../index.ts';
+import { InMemoryCaseMemory } from '../case-memory.ts';
 import { InMemoryUsageLedger } from '../usage-ledger.ts';
 import { fakeCredentials, fakeFetch } from './fixtures.ts';
 
@@ -108,6 +109,32 @@ test('a configured retry policy retries a transient agent failure once and recor
   assert.equal(calls, 2);
   assert.equal(usage.list()[0]?.attempts, 2);
   assert.equal(usage.list()[0]?.status, 'success');
+});
+
+test('runtime writes content-free success and failure cases without changing invocation results', async () => {
+  const memory = new InMemoryCaseMemory();
+  const registry = createWorkbenchRegistry({
+    includeBuiltinAgents: false, agents: [httpAgent], runtime: {
+      caseMemory: memory,
+      fetchImpl: fakeFetch({ routes: { '/v1/workflows/run': { ok: true } } }).fetch as never,
+    },
+  });
+  await registry.invoke('copywriter-dify', {
+    sessionId: 's', workspacePath: '.', credentials: fakeCredentials({ DIFY_BASE_URL: 'https://dify.example.invalid', DIFY_API_KEY: 'synthetic' }),
+  }, { topic: 'private phrase' });
+  const success = memory.list()[0];
+  assert.equal(success?.outcome, 'success');
+  assert.equal(success?.strategy, 'cache-successful-invocation-metadata');
+  assert.equal(success?.inputFingerprint.length, 64);
+
+  const failing = createWorkbenchRegistry({ includeBuiltinAgents: false, agents: [httpAgent], runtime: { caseMemory: memory } });
+  await assert.rejects(
+    () => failing.invoke('copywriter-dify', { sessionId: 's', workspacePath: '.', credentials: fakeCredentials({ DIFY_BASE_URL: null, DIFY_API_KEY: null }) }, { topic: 'private phrase' }),
+  );
+  const failure = memory.list()[1];
+  assert.equal(failure?.outcome, 'failure');
+  assert.equal(failure?.failureCategory, 'missing-configuration');
+  assert.equal(failure?.strategy, 'request-admin-configure-credential');
 });
 
 test('a configured sliding window rate limit blocks a second invocation', async () => {

@@ -35,6 +35,7 @@ import { parseAgentWorkbenchConfig } from '../src/agent-manifest.ts';
 import { ExecutionGovernor } from '../src/execution-governor.ts';
 import { EncryptedFileSecretVault } from '../src/secret-vault.ts';
 import { JsonlUsageLedger } from '../src/usage-ledger.ts';
+import { JsonlCaseMemory } from '../src/case-memory.ts';
 import type { CredentialReader, ToolContext } from '../src/ports.ts';
 import { listCapabilityTools, callCapabilityTool } from './mcp-tools.ts';
 import { staticCredentials, type SessionContextLike } from './session-context-bridge.ts';
@@ -124,6 +125,7 @@ export function advertisedTools(): Tool[] {
 
 export async function startServer(config: ServerConfig): Promise<void> {
   const usage = new JsonlUsageLedger(join(config.workspaceRootPath, '.agent-workbench', 'usage.jsonl'));
+  const caseMemory = new JsonlCaseMemory(join(config.workspaceRootPath, '.agent-workbench', 'case-memory.jsonl'));
   const governor = new ExecutionGovernor({ usageReader: usage });
   /** Reloads the Control Center manifest at MCP request boundaries. */
   const registryForRequest = () => {
@@ -133,7 +135,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
     return createWorkbenchRegistry({
       ...(configured?.agents ? { agents: configured.agents } : {}),
       ...(configured?.includeBuiltinAgents === undefined ? {} : { includeBuiltinAgents: configured.includeBuiltinAgents }),
-      runtime: { usageRecorder: usage, usageReader: usage, governor },
+      runtime: { usageRecorder: usage, usageReader: usage, governor, caseMemory },
     });
   };
   const host = createHostContext(config);

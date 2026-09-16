@@ -8,6 +8,9 @@
   "exports": "./src/index.ts",
   "scripts": {
     "test": "node --test \"src/**/*.test.ts\" \"adapter/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "eval:video-chapters": "node scripts/run-video-chapter-eval.ts",
+    "verify:dify-sandbox": "node scripts/verify-dify-sandbox.ts",
     "serve:mcp": "node adapter/mcp-server.ts",
     "serve:control": "node adapter/control-center-server.ts"
   },
@@ -18,6 +21,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3"
   }
 }

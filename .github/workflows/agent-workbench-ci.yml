@@ -1,0 +1,54 @@
+name: Agent Workbench Evidence
+
+on:
+  pull_request:
+    paths:
+      - 'business/agent-workbench/**'
+      - '.github/workflows/agent-workbench-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'business/agent-workbench/**'
+      - '.github/workflows/agent-workbench-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck, tests and fallback benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: business/agent-workbench
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+          cache: npm
+          cache-dependency-path: business/agent-workbench/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Typecheck the business layer
+        run: npm run typecheck
+
+      - name: Run synthetic unit and adapter tests
+        run: npm test
+
+      - name: Emit video fallback trace benchmark
+        run: npm run eval:video-chapters -- --out artifacts/video-chapter-eval.json
+
+      - name: Upload redacted evaluation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-chapter-eval
+          path: business/agent-workbench/artifacts/video-chapter-eval.json
+          if-no-files-found: error

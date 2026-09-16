@@ -12,6 +12,7 @@
 | Agent Manifest、输入校验、HTTP / Python / MCP 执行适配 | 本业务层新增 |
 | 按 Agent 显式引用凭据、受限子进程环境、用量 JSONL 账本 | 本业务层新增 |
 | 任务产物隔离、章节聚合规则回退、访问撤销、结果映射 | 本业务层新增 |
+| Trace/Benchmark、无原文 Case Memory、外部 Agent 沙箱验证流程 | 本业务层新增 |
 | 工作台导航、WebUI 团队认证和受控 HTTP API 挂载 | 本项目对 Craft WebUI / Server 的最小接线修改 |
 
 业务层位于根目录 `business/agent-workbench/`，刻意不加入 `packages/*` 或 `apps/*` workspace，以避免把业务依赖写进上游 `bun.lock`。它通过结构化类型、MCP 和守卫测试与底座接线，而不是修改底座的内置工具数组。
@@ -30,11 +31,15 @@
 
 每个 Manifest 可带 `policy`：`retry`（最多 5 次、指数退避）、`rateLimit`（滑动窗口）、`quota`（每日调用 / Token）和 `cost`（每百万 Token 的估算价格）。策略由运行时执行；用量 JSONL 为日配额和看板提供持久化事实。
 
-## 用量与隐私
+## Eval、Case Memory 与隐私
+
+`video-chapter-eval.ts` 将固定合成转写分别喂给“模型抛错”“缺章节”和“合法模型输出”三个场景，并断言：失败时必须回退为四段连续章节、合法结果才可采用模型输出。`npm run eval:video-chapters` 会生成可上传的 JSON Trace/Benchmark；Trace 仅包含用例 ID、来源、回退原因、章节顺序和断言结果，不包含转写正文。
+
+`case-memory.ts` 将成功调用和失败类型沉淀为可选的 JSONL Case Memory：同一输入只存 SHA-256 指纹、字节数、耗时、重试次数和处理策略，例如 `request-admin-configure-credential`、`wait-for-rate-limit-window`。它不是响应缓存，绝不记录或复用 prompt、模型返回、URL、Key；这样既能形成运维案例库，也不会把业务正文带入观测数据。
 
 `usage-ledger.ts` 记录的是：Agent 标识、类型、时间、耗时、成功/失败、输入/输出字节数，以及上游响应中的可选 token 数。经团队工作台发起的调用额外记录账号 ID 和部门 ID，以便只做部门/个人聚合；不会记录 prompts、结果正文、URL 或 API Key。
 
-独立 MCP 服务会把账本写在 `<workspace>/.agent-workbench/usage.jsonl`。嵌入 Craft 时，宿主可将自己的 `UsageRecorder` 传入运行时并同步到其监控或数据库；成本与配额规则仍应由部署方基于实际供应商价格实现。
+独立 MCP 服务会把账本写在 `<workspace>/.agent-workbench/usage.jsonl`，并把 Case Memory 写在同目录 `case-memory.jsonl`。嵌入 Craft 时，宿主可将自己的 `UsageRecorder` / `CaseMemoryRecorder` 传入运行时并同步到其监控或数据库；成本与配额规则仍应由部署方基于实际供应商价格实现。
 
 ## Craft 原生工作台与团队模式
 
@@ -68,12 +73,16 @@ MCP Server 在每次 `tools/list` / `tools/call` 时读取最新 Manifest，在�
 cd business/agent-workbench
 npm ci
 npm test
+npm run typecheck
+npm run eval:video-chapters -- --out artifacts/video-chapter-eval.json
 
 # 将模板复制到仓库外、填入你自己的安全配置后启动
 npm run serve:mcp -- --session-id demo-1 --workspace-root /absolute/path/to/workspace --agents-config /safe/path/agents.json
 ```
 
 `--agents-config` 可选；不传时保留五个首批示例工具。传入配置时可设置 `includeBuiltinAgents: false`，使 `tools/list` 只返回当前业务配置的 Agent。
+
+GitHub Actions 中的 **Agent Workbench Evidence** 工作流会执行类型检查、全部合成测试，并上传上述红线回退评测报告。真实 Dify 沙箱不会自动在 CI 中请求；需要部署方有意识地按 [`docs/external-agent-sandbox.md`](docs/external-agent-sandbox.md) 提供最小权限临时凭据后执行验证。
 
 ## 现有模块
 
@@ -82,6 +91,8 @@ npm run serve:mcp -- --session-id demo-1 --workspace-root /absolute/path/to/work
 | `src/agent-manifest.ts` | 解析和校验管理员控制的 Agent 配置 |
 | `src/agent-runtime.ts` | HTTP、Python、MCP 执行适配与显式凭据注入 |
 | `src/usage-ledger.ts` | 无原文的调用统计、内存与 JSONL 实现 |
+| `src/case-memory.ts` | 无原文成功/失败案例记忆、处理策略与 JSONL 制品 |
+| `src/video-chapter-eval.ts` | 固定输入章节降级 Trace / Benchmark |
 | `src/secret-vault.ts` | AES-256-GCM 本地密钥库；仅返回配置状态 |
 | `src/control-plane.ts` | Manifest、密钥状态与用量/成本看板的控制面 |
 | `src/result-mapper.ts` | 安全映射不同 Agent 返回的文本、文件链接和结构化结果 |
@@ -95,7 +106,7 @@ npm run serve:mcp -- --session-id demo-1 --workspace-root /absolute/path/to/work
 | `adapter/team-workbench.ts` | Web 团队认证、已鉴权执行和部门/个人用量 API |
 | `adapter/session-context-bridge.ts` | Craft Session / Credential Manager 的窄适配 |
 
-测试使用合成数据，不连接真实服务。目前 81 个测试覆盖 Manifest 校验、三种接入形态、凭据缺失、加密密钥库、控制中心、结果映射、团队目录、团队鉴权 API、重试/限流/配额、使用量脱敏、MCP、任务隔离、章节降级和上游契约。
+测试使用合成数据，不连接真实服务。测试覆盖 Manifest 校验、三种接入形态、凭据缺失、加密密钥库、控制中心、结果映射、团队目录、团队鉴权 API、重试/限流/配额、使用量与 Case Memory 脱敏、MCP、任务隔离、章节降级和上游契约。
 
 ## 脱敏与许可证
 

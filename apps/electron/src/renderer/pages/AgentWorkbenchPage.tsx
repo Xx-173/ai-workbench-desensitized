@@ -23,7 +23,7 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   return payload as T
 }
 
-function usageCards(usage: Usage) {
+function usageCards(usage: Usage): ReadonlyArray<readonly [string, string | number]> {
   return [
     ['调用次数', usage.calls], ['成功 / 失败', `${usage.successes} / ${usage.failures}`],
     ['累计耗时', `${Math.round(usage.durationMs / 1000)}s`], ['Token', usage.inputTokens + usage.outputTokens],
@@ -136,7 +136,7 @@ export default function AgentWorkbenchPage() {
       {tab === 'run' && <section className="grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
         <aside className="space-y-2">{data.agents.length === 0 ? <p className="rounded-lg border p-4 text-sm text-muted-foreground">管理员尚未配置可用 Agent。</p> : data.agents.map((agent) => <button key={agent.id} onClick={() => setSelectedAgentId(agent.id)} className={`w-full rounded-lg border p-3 text-left ${selectedAgentId === agent.id ? 'border-foreground bg-muted/60' : 'hover:bg-muted/40'}`}><div className="flex justify-between gap-2"><strong className="text-sm">{agent.id}</strong><span className="text-xs text-muted-foreground">{agent.kind}</span></div><p className="mt-1 text-xs text-muted-foreground">{agent.description}</p><p className={`mt-2 text-xs ${agent.health.status === 'configured' ? 'text-emerald-600' : 'text-amber-600'}`}>{agent.health.status === 'configured' ? '已配置' : `缺少 ${agent.health.missingReferences.join(', ')}`}</p></button>)}</aside>
         <div className="space-y-4"><section className="rounded-xl border bg-card p-4"><h2 className="font-medium">{selectedAgent?.description ?? '选择一个 Agent'}</h2><p className="mt-1 text-xs text-muted-foreground">工具名：{selectedAgent?.toolName ?? '-'}</p><label className="mt-4 block text-sm font-medium">输入 JSON</label><textarea value={input} onChange={(event) => setInput(event.target.value)} spellCheck={false} className="mt-2 min-h-52 w-full rounded-md border bg-background p-3 font-mono text-xs outline-none focus:ring-2 focus:ring-ring" /><button disabled={!selectedAgent || busy || selectedAgent.health.status !== 'configured'} onClick={() => void runAgent()} className="mt-3 inline-flex items-center gap-2 rounded-md bg-foreground px-3 py-2 text-sm font-medium text-background disabled:opacity-50"><Play className="h-4 w-4" />{busy ? '执行中…' : '运行并记录用量'}</button></section>
-        {result && <section className="rounded-xl border bg-card p-4"><h2 className="font-medium">映射后的执行结果</h2><pre className="mt-3 max-h-[440px] overflow-auto rounded-md bg-muted p-3 text-xs leading-5">{JSON.stringify(result, null, 2)}</pre></section>}</div>
+        {result !== null && <section className="rounded-xl border bg-card p-4"><h2 className="font-medium">映射后的执行结果</h2><pre className="mt-3 max-h-[440px] overflow-auto rounded-md bg-muted p-3 text-xs leading-5">{String(JSON.stringify(result, null, 2) ?? '')}</pre></section>}</div>
       </section>}
 
       {tab === 'team' && isAdmin && <section className="space-y-5">

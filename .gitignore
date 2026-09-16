@@ -61,6 +61,7 @@ pnpm-lock.yaml
 # Agent Workbench local manifests and aggregate usage ledger
 .agent-workbench/
 business/agent-workbench/config/agents.local.json
+business/agent-workbench/artifacts/
 
 # SSH keys and secrets
 *.pem

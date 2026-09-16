@@ -27,6 +27,7 @@
 - **隐私友好的用量账本**：每次执行记录 Agent 标识、类型、时长、成功/失败、输入/输出字节数及上游可选 token 数；Web 工作台调用还会记录不可逆的账号 ID 与部门 ID 维度，不保存提示词、结果正文、端点或密钥。
 - **Craft 原生工作台与团队后台**：在 Craft 左侧导航加入全宽“AI 工作台”。成员只能运行管理员已配置且已就绪的 Agent；管理员可开通/禁用账号、维护部门、查看部门和个人聚合用量、编辑 Manifest，并录入 AES-256-GCM 加密的 Key 引用。页面不会回显 Key。
 - **执行策略**：每个 Agent 可配置有限次数重试、指数退避、滑动窗口限流以及日调用 / Token 配额。策略在运行时执行，持久化用量账本用于重启后的配额判断。
+- **可展示的质量证据**：固定合成输入的章节降级 Trace/Benchmark 断言模型失败仍返回连续四章节；Case Memory 以不可逆指纹沉淀成功调用与失败处理策略，避免把业务正文写入观测数据。独立 GitHub Actions 会执行 TypeScript 检查、合成测试并上传脱敏评测制品。
 - **任务与访问边界**：每个任务独占 `inputs/`、`outputs/`、`tmp/`；路径越界被拒绝。账号冻结会使已签发凭据失效、关闭长连接、清理授权缓存并在调用前复核状态。
 - **MCP 双向接线**：同一注册表既可被宿主进程直接调用，也可通过 stdio MCP 服务对外暴露；工作台还能以 MCP Client 调用其他 Agent。
 
@@ -91,12 +92,16 @@ $env:AGENT_WORKBENCH_ROOT = 'D:\safe\craft-agent-workbench'
 bun run server:prod
 ```
 
-`AGENT_WORKBENCH_ROOT` 下会保留加密 Key 库、Manifest、团队目录和无原文用量 JSONL；单实例演示默认用受限权限 JSON 文件持久化。生产多实例需要把团队目录/用量账本替换为 PostgreSQL 等共享存储，并在反向代理层强制 HTTPS/WSS。
+`AGENT_WORKBENCH_ROOT` 下会保留加密 Key 库、Manifest、团队目录、无原文用量 JSONL 和无原文 Case Memory JSONL；单实例演示默认用受限权限 JSON 文件持久化。生产多实例需要把团队目录/用量账本替换为 PostgreSQL 等共享存储，并在反向代理层强制 HTTPS/WSS。
+
+### 真实外部 Agent 沙箱验收
+
+仓库提供 Dify/Coze 的协议适配与完整的本地配置检查，但不会把未拿到部署方凭据的服务写成“已连通”。当你有最小权限 Dify 沙箱 Key 时，可按 [`business/agent-workbench/docs/external-agent-sandbox.md`](business/agent-workbench/docs/external-agent-sandbox.md) 运行一次真实工作流调用；脚本只落地耗时、输入指纹、返回大小和结果字段名等脱敏验收制品，不会提交凭据或业务内容。
 
 ## 当前边界
 
 - “AI 工作台”已经嵌入 Craft 的共享 React AppShell，浏览器 WebUI 与桌面端都能看到入口；团队鉴权与工作台 API 只在启用 `CRAFT_TEAM_MODE` 的服务器上可用。桌面端本地打开该页时若没有对应服务器 API，会明确提示改用已部署的 WebUI。
-- Dify、Coze、Fish 等仅提供协议适配、配置入口和本地配置完整性检查，不包含真实工作流、账户、端点、素材或已验证的生产连通性。
+- Dify、Coze、Fish 等仅提供协议适配、配置入口和本地配置完整性检查；真实连通须由部署方按沙箱验收流程执行并保存制品，不包含真实工作流、账户、端点或素材。
 - 用量账本提供调用与 token 聚合、部门/个人维度、基础成本估算、重试/限流/日配额规则；多租户计费、供应商价格同步、分布式限流、立即断开已建立的 WebSocket 和告警仍需结合生产部署继续建设。
 - 本仓库提供代码与测试级验证，不主张生产规模、业务指标、自研大模型或 Craft 底座本身的能力归属。
 
