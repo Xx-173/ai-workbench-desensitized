@@ -1,92 +1,74 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+/**
+ * Browser entry for the Craft shell.
+ *
+ * Team mode authenticates at the HTTP boundary first. After that the same
+ * Craft conversation, workspace and workbench navigation used by the desktop
+ * renderer is mounted in the browser. The workbench determines administration
+ * controls from the signed server identity.
+ */
 
-type Agent = { id: string; name: string; kind: string; description: string; icon: string; endpoint?: string; secretReferenceId?: string; secretReference?: { id: string; name: string; environmentVariable: string }; departmentIds: string[]; departmentNames: string[]; enabled: boolean; inputSchema?: { properties: Record<string, { type: string; description?: string }>; required?: string[] } }
-type TeamUsage = { total: { calls: number; successes: number; failures: number }; byDepartment: Array<{ id: string; name: string; calls: number; successes: number; failures: number }>; byUser: Array<{ id: string; name: string; calls: number; successes: number; failures: number }> }
-type Dashboard = {
-  currentUser: { id: string; displayName: string; username: string; departmentId: string; departmentName: string; role: 'admin' | 'member' }
-  agents: Agent[]; recentUsage: Array<{ id: string; agentName: string; memberName: string; departmentName: string; status: string; createdAt: string }>
-  summary: { totalRuns: number; configuredAgents: number; activeAgents: number }
-  admin?: { departments: Array<{ id: string; name: string }>; members: Array<{ id: string; displayName: string; username: string; departmentId: string; departmentName: string; role: string; status: string }>; allAgents: Agent[]; secrets: Array<{ id: string; name: string; environmentVariable: string }>; teamUsage: TeamUsage }
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react'
+import { useTranslation } from 'react-i18next'
+import { createWebApi } from './adapter/web-api'
+import type { WsRpcClient } from '../../electron/src/transport/client'
+
+const ElectronApp = lazy(() => import('@/App'))
+type Phase = 'loading' | 'error' | 'ready'
+
+function LoadingScreen() {
+  const { t } = useTranslation()
+  return <div className="flex flex-col items-center justify-center h-screen font-sans text-foreground/50 gap-3"><div className="animate-spin w-6 h-6 border-2 border-current border-t-transparent rounded-full" /><p className="text-[13px]">{t('webui.connectingToServer')}</p></div>
 }
 
-function normalizeDashboard(raw: any): Dashboard {
-  const identity = raw.identity
-  const departmentNames = new Map((raw.departments ?? []).map((department: any) => [department.id, department.name]))
-  const agentIcon: Record<string, string> = { dify: '▶', fish: '♫', python: '✦', http: '⌁', mcp: '◇' }
-  const agents = (raw.agents ?? []).map((agent: any) => ({
-    id: agent.id, name: agent.toolName ?? agent.id, kind: agent.kind ?? 'http', description: agent.description ?? '已接入业务能力',
-    icon: agentIcon[agent.kind] ?? '✦', endpoint: agent.health?.status === 'configured' ? 'configured' : undefined, inputSchema: agent.inputSchema,
-    secretReferenceId: undefined, departmentIds: [], departmentNames: [], enabled: agent.health?.status !== 'disabled',
-  }))
-  const users = raw.users ?? []
-  return {
-    currentUser: { id: identity.userId, displayName: identity.displayName, username: identity.username, departmentId: identity.departmentId, departmentName: departmentNames.get(identity.departmentId) ?? identity.departmentId, role: identity.role },
-    agents, recentUsage: [],
-    summary: { totalRuns: raw.ownUsage?.calls ?? 0, configuredAgents: agents.filter((agent: Agent) => Boolean(agent.endpoint)).length, activeAgents: agents.length },
-    ...(identity.role === 'admin' ? { admin: { departments: raw.departments ?? [], members: users.map((user: any) => ({ id: user.id, username: user.username, displayName: user.displayName, departmentId: user.departmentId, departmentName: departmentNames.get(user.departmentId) ?? user.departmentId, role: user.role, status: user.status })), allAgents: agents, secrets: [], teamUsage: raw.teamUsage ?? { total: { calls: 0, successes: 0, failures: 0 }, byDepartment: [], byUser: [] } } } : {}),
-  }
+function ErrorScreen({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const { t } = useTranslation()
+  return <div className="flex flex-col items-center justify-center h-screen font-sans text-foreground/50 gap-3"><p className="text-base font-medium text-destructive">{t('webui.connectionFailed')}</p><p className="text-[13px] max-w-md text-center">{message}</p><div className="flex gap-2 mt-2"><button onClick={onRetry} className="px-4 py-1.5 rounded-md bg-background shadow-minimal text-[13px] text-foreground/70 cursor-pointer">{t('common.retry')}</button><button onClick={() => { fetch('/api/auth/logout', { method: 'POST' }).then(() => { window.location.href = '/login' }) }} className="px-4 py-1.5 rounded-md bg-background shadow-minimal text-[13px] text-foreground/70 cursor-pointer">{t('webui.logOut')}</button></div></div>
 }
-
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) }, ...init })
-  if (response.status === 401) { window.location.href = '/login'; throw new Error('登录已失效') }
-  const payload = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(payload.error || '请求失败')
-  return payload as T
-}
-
-const kindLabel: Record<string, string> = { dify: 'Dify 工作流', fish: 'Fish 音色服务', python: 'Python 脚本', http: 'HTTP 服务', mcp: 'MCP Agent' }
 
 export default function App() {
-  const [data, setData] = useState<Dashboard | null>(null)
-  const [page, setPage] = useState<'home' | 'agents' | 'admin'>('home')
-  const [selected, setSelected] = useState<Agent | null>(null)
-  const [taskInput, setTaskInput] = useState('')
-  const [notice, setNotice] = useState('')
+  const [phase, setPhase] = useState<Phase>('loading')
   const [error, setError] = useState('')
-  const isAdmin = data?.currentUser.role === 'admin'
+  const clientRef = useRef<WsRpcClient | null>(null)
+  const initRef = useRef(false)
 
-  const refresh = async () => {
-    try { setData(normalizeDashboard(await request('/api/workbench/bootstrap'))); setError('') } catch (reason) { setError(reason instanceof Error ? reason.message : '加载失败') }
+  const initialize = async () => {
+    setPhase('loading'); setError('')
+    try {
+      const configRes = await fetch('/api/config', { credentials: 'same-origin' })
+      if (!configRes.ok) {
+        if (configRes.status === 401) { window.location.href = '/login'; return }
+        throw new Error(`Failed to fetch config: ${configRes.status}`)
+      }
+      const { wsUrl } = await configRes.json() as { wsUrl: string }
+      if (!wsUrl) throw new Error('Server did not return a WebSocket URL')
+      const params = new URLSearchParams(window.location.search)
+      let workspaceId = params.get('workspace') ?? undefined
+      if (!workspaceId) {
+        try {
+          const workspaceRes = await fetch('/api/config/workspaces', { credentials: 'same-origin' })
+          if (workspaceRes.ok) {
+            const { defaultWorkspaceId } = await workspaceRes.json() as { defaultWorkspaceId?: string }
+            if (defaultWorkspaceId) workspaceId = defaultWorkspaceId
+          }
+        } catch { /* Workspace selection can still happen within Craft. */ }
+      }
+      clientRef.current?.destroy()
+      const { api, client } = createWebApi({ serverUrl: wsUrl, workspaceId })
+      clientRef.current = client
+      ;(window as any).electronAPI = api
+      client.connect()
+      setPhase('ready')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause)); setPhase('error')
+    }
   }
-  useEffect(() => { void refresh() }, [])
-  const submit = async (path: string, body: unknown, method = 'POST') => {
-    try { await request(path, { method, body: JSON.stringify(body) }); await refresh(); setNotice('已保存'); setError(''); return true } catch (reason) { setError(reason instanceof Error ? reason.message : '操作失败'); return false }
-  }
-  const runAgent = async () => {
-    if (!selected) return
-    try { const result = await request<{ summary?: string }>('/api/workbench/invoke', { method: 'POST', body: JSON.stringify({ agentId: selected.id, input: { [primaryInput(selected).name]: taskInput } }) }); setNotice(result.summary || '任务已提交'); setSelected(null); setTaskInput(''); await refresh() } catch (reason) { setError(reason instanceof Error ? reason.message : '任务提交失败') }
-  }
-  const usable = data?.agents ?? []
-  const adminData = data?.admin
-  const header = useMemo(() => data ? `${data.currentUser.departmentName} · ${data.currentUser.displayName}` : '正在加载', [data])
-  if (!data) return <main className="loading"><div className="brand-mark">智</div><p>{error || '正在连接智能工作台…'}</p><button onClick={() => void refresh()}>重新连接</button></main>
 
-  return <div className="shell">
-    <aside className="sidebar">
-      <div className="brand"><span className="brand-mark">智</span><span>智能工作台<small>TEAM AI HUB</small></span></div>
-      <nav><button className={page === 'home' ? 'active' : ''} onClick={() => setPage('home')}><b>◈</b>工作台</button><button className={page === 'agents' ? 'active' : ''} onClick={() => setPage('agents')}><b>✦</b>Agent 中心</button>{isAdmin && <button className={page === 'admin' ? 'active' : ''} onClick={() => setPage('admin')}><b>⚙</b>管理控制台</button>}</nav>
-      <div className="sidebar-note"><span className="online" />服务连接受控<br /><small>凭据仅由管理员配置</small></div>
-      <button className="account" onClick={() => { void fetch('/api/auth/logout', { method: 'POST' }); window.location.href = '/login' }}><span className="avatar">{data.currentUser.displayName.slice(0, 1)}</span><span>{header}<small>退出登录</small></span></button>
-    </aside>
-    <main className="content">
-      {notice && <div className="toast success" onClick={() => setNotice('')}>{notice}</div>}{error && <div className="toast error" onClick={() => setError('')}>{error}</div>}
-      {page === 'home' && <><header><div><p className="eyebrow">BUSINESS AI OPERATIONS</p><h1>早上好，{data.currentUser.displayName}</h1><p className="muted">选择一个已授权的业务 Agent，系统会自动使用管理员配置的连接与凭据。</p></div><button className="secondary" onClick={() => setPage('agents')}>查看全部 Agent →</button></header><section className="stat-grid"><Stat label="可用 Agent" value={data.summary.activeAgents} note="按部门自动授权" /><Stat label="已配置连接" value={data.summary.configuredAgents} note="由管理员统一托管" /><Stat label="累计调用" value={data.summary.totalRuns} note="已计入部门与个人" /></section><section><div className="section-heading"><div><p className="eyebrow">RECOMMENDED</p><h2>常用能力</h2></div><span className="muted">不需要选择底层模型</span></div><AgentGrid agents={usable.slice(0, 4)} onSelect={setSelected} /></section><UsageTable records={data.recentUsage} /></>}
-      {page === 'agents' && <><header><div><p className="eyebrow">AGENT CATALOG</p><h1>Agent 中心</h1><p className="muted">当前展示你所在部门可使用的能力。每项能力可对接 Dify、Fish、Python 或自建 HTTP 服务。</p></div></header><AgentGrid agents={usable} onSelect={setSelected} expanded /></>}
-      {page === 'admin' && isAdmin && adminData && <AdminPanel data={adminData} submit={submit} refresh={refresh} />}
-    </main>
-    {selected && <div className="modal-backdrop" onMouseDown={() => setSelected(null)}><section className="modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => setSelected(null)}>×</button><span className="agent-icon large">{selected.icon}</span><p className="eyebrow">{kindLabel[selected.kind]}</p><h2>{selected.name}</h2><p className="muted">{selected.description}</p><label>{primaryInput(selected).description}<textarea autoFocus placeholder="填写该 Agent 需要的业务内容" value={taskInput} onChange={(event) => setTaskInput(event.target.value)} /></label><button className="primary" onClick={() => void runAgent()}>提交任务</button><p className="hint">运行记录会计入你的个人与部门使用统计。</p></section></div>}
-  </div>
+  useEffect(() => {
+    if (!initRef.current) { initRef.current = true; void initialize() }
+    return () => clientRef.current?.destroy()
+  }, [])
+
+  if (phase === 'loading') return <LoadingScreen />
+  if (phase === 'error') return <ErrorScreen message={error} onRetry={() => void initialize()} />
+  return <Suspense fallback={<LoadingScreen />}><ElectronApp /></Suspense>
 }
-
-function Stat({ label, value, note }: { label: string; value: number; note: string }) { return <article className="stat"><p>{label}</p><strong>{value}</strong><small>{note}</small></article> }
-function primaryInput(agent: Agent) { const properties = agent.inputSchema?.properties ?? {}; const names = agent.inputSchema?.required?.filter((name) => properties[name]) ?? Object.keys(properties); const name = names[0] ?? 'task'; return { name, description: properties[name]?.description ?? `任务说明（${name}）` } }
-function AgentGrid({ agents, onSelect, expanded }: { agents: Agent[]; onSelect: (agent: Agent) => void; expanded?: boolean }) { return <div className={expanded ? 'agent-grid expanded' : 'agent-grid'}>{agents.map((agent) => <article className="agent-card" key={agent.id}><div className="agent-top"><span className="agent-icon">{agent.icon}</span><span className={agent.endpoint ? 'tag ready' : 'tag'}>{agent.endpoint ? '已配置' : '待配置'}</span></div><h3>{agent.name}</h3><p>{agent.description}</p><footer><span>{kindLabel[agent.kind]}</span><button onClick={() => onSelect(agent)}>使用 Agent →</button></footer></article>)}</div> }
-function UsageTable({ records }: { records: Dashboard['recentUsage'] }) { return <section className="usage"><div className="section-heading"><div><p className="eyebrow">ACTIVITY</p><h2>最近使用</h2></div></div>{records.length === 0 ? <div className="empty">还没有任务记录。先从上方选择一个 Agent 开始。</div> : <div className="table">{records.map((record) => <div className="row" key={record.id}><span className="dot" /><b>{record.agentName}</b><span>{record.memberName} · {record.departmentName}</span><span className={record.status === 'succeeded' ? 'status ok' : 'status'}>{record.status === 'succeeded' ? '已完成' : record.status === 'failed' ? '调用失败' : '待管理员配置'}</span><time>{new Date(record.createdAt).toLocaleString()}</time></div>)}</div>}</section> }
-function AdminPanel({ data, submit, refresh }: { data: NonNullable<Dashboard['admin']>; submit: (path: string, body: unknown, method?: string) => Promise<boolean>; refresh: () => Promise<void> }) {
-  const [member, setMember] = useState({ username: '', displayName: '', password: '', departmentId: data.departments[0]?.id ?? '', role: 'member' }); const [department, setDepartment] = useState(''); const [secret, setSecret] = useState({ name: '', value: '' }); const [configText, setConfigText] = useState(''); const [configError, setConfigError] = useState('')
-  useEffect(() => { void request<unknown>('/api/workbench/config').then((config) => setConfigText(JSON.stringify(config, null, 2))).catch((reason) => setConfigError(reason instanceof Error ? reason.message : '读取配置失败')) }, [])
-  const saveConfig = async () => { try { const config = JSON.parse(configText); await request('/api/workbench/config', { method: 'PUT', body: JSON.stringify(config) }); setConfigText(JSON.stringify(config, null, 2)); setConfigError(''); await refresh() } catch (reason) { setConfigError(reason instanceof Error ? reason.message : '配置必须是合法 JSON') } }
-  return <><header><div><p className="eyebrow">ADMIN CONTROL PLANE</p><h1>管理控制台</h1><p className="muted">成员、部门、连接地址与凭据都在此统一管理；业务员工不会看到模型选择或密钥。</p></div></header><section className="admin-grid"><article className="panel"><h2>部门与成员</h2><form onSubmit={(event: FormEvent) => { event.preventDefault(); void submit('/api/workbench/users', member).then((saved) => { if (saved) setMember({ ...member, username: '', displayName: '', password: '' }) }) }}><input placeholder="登录账号" value={member.username} onChange={(e) => setMember({ ...member, username: e.target.value })} /><input placeholder="姓名" value={member.displayName} onChange={(e) => setMember({ ...member, displayName: e.target.value })} /><input placeholder="初始密码" type="password" value={member.password} onChange={(e) => setMember({ ...member, password: e.target.value })} /><select value={member.departmentId} onChange={(e) => setMember({ ...member, departmentId: e.target.value })}>{data.departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button className="primary">开通成员账号</button></form><form className="inline-form" onSubmit={(event) => { event.preventDefault(); void submit('/api/workbench/departments', { name: department }).then((saved) => { if (saved) setDepartment('') }) }}><input placeholder="新部门名称" value={department} onChange={(e) => setDepartment(e.target.value)} /><button className="secondary">新增部门</button></form><div className="member-list">{data.members.map((item) => <div key={item.id}><span className="avatar">{item.displayName.slice(0, 1)}</span><b>{item.displayName}<small>@{item.username} · {item.departmentName} · {item.role}</small></b><button className={item.status === 'active' ? 'text-button danger' : 'text-button'} onClick={() => void submit(`/api/workbench/users/${item.id}`, { status: item.status === 'active' ? 'disabled' : 'active' }, 'PATCH')}>{item.status === 'active' ? '停用' : '启用'}</button></div>)}</div></article><article className="panel"><h2>加密凭据库</h2><p className="muted">密钥仅在管理员提交时写入服务端加密凭据库，浏览器和普通成员不会再读取明文。</p><form onSubmit={(event) => { event.preventDefault(); void submit('/api/workbench/secrets', secret).then((saved) => { if (saved) setSecret({ name: '', value: '' }) }) }}><input placeholder="例如：DIFY_API_KEY" value={secret.name} onChange={(e) => setSecret({ ...secret, name: e.target.value.toUpperCase() })} /><input placeholder="粘贴真实密钥" type="password" value={secret.value} onChange={(e) => setSecret({ ...secret, value: e.target.value })} /><button className="primary">加密保存凭据</button></form><div className="empty">凭据名称与配置清单通过受控 API 管理；不会在此页面回显密钥。</div></article></section><section className="panel agents-config"><h2>Agent 连接映射</h2><p className="muted">编辑受控 Manifest 可以接入 Dify、Fish、Python、HTTP 或 MCP。只允许填写密钥引用名；真实值仍仅通过上方加密凭据库写入。</p>{data.allAgents.map((agent) => <AgentConfig key={agent.id} agent={agent} departments={data.departments} secrets={data.secrets} submit={submit} />)}<textarea className="config-editor" aria-label="Agent Manifest JSON" value={configText} onChange={(event) => setConfigText(event.target.value)} placeholder="正在读取受控 Manifest…" /><div className="config-actions"><button className="primary" onClick={() => void saveConfig()}>校验并保存 Manifest</button>{configError && <span className="config-error">{configError}</span>}</div></section><section className="panel"><h2>团队使用概览</h2><p className="muted">仅显示账号、部门和调用聚合，不保存任务正文。</p><div className="usage-lines">{data.teamUsage.byDepartment.length === 0 ? <div className="empty">暂时没有调用记录。</div> : data.teamUsage.byDepartment.map((item) => <div key={item.id}><b>{item.name}</b><span>{item.calls} 次调用 · 成功 {item.successes} · 失败 {item.failures}</span></div>)}</div></section></>
-}
-function AgentConfig({ agent }: { agent: Agent; departments: Array<{ id: string; name: string }>; secrets: Array<{ id: string; name: string; environmentVariable: string }>; submit: (path: string, body: unknown, method?: string) => Promise<boolean> }) { return <div className="agent-config"><div><span className="agent-icon">{agent.icon}</span><b>{agent.name}<small>{kindLabel[agent.kind]}</small></b></div><span className={agent.endpoint ? 'status ok' : 'status'}>{agent.endpoint ? '连接健康' : '待配置或健康检查失败'}</span><span className="muted">由受控 Manifest 与加密凭据库管理</span></div> }

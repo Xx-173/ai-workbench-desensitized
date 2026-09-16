@@ -41,6 +41,7 @@ import type { WebuiHandler } from '@craft-agent/server-core/webui'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { getWorkspaces } from '@craft-agent/shared/config'
 import { createMessagingBootstrap, type MessagingBootstrapHandle } from '@craft-agent/messaging-gateway'
+import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 
 // --generate-token: print a crypto-random token and exit
 if (process.argv.includes('--generate-token')) {
@@ -154,6 +155,27 @@ if (teamMode) {
   console.log('[team] Administrator-issued accounts and department usage are enabled.')
 }
 
+/** In team mode, only organization administrators may alter central model state. */
+const organizationModelAdminChannels = new Set<string>([
+  RPC_CHANNELS.settings.SETUP_LLM_CONNECTION,
+  RPC_CHANNELS.settings.TEST_LLM_CONNECTION_SETUP,
+  RPC_CHANNELS.llmConnections.SAVE,
+  RPC_CHANNELS.llmConnections.DELETE,
+  RPC_CHANNELS.llmConnections.TEST,
+  RPC_CHANNELS.llmConnections.SET_DEFAULT,
+  RPC_CHANNELS.llmConnections.SET_WORKSPACE_DEFAULT,
+  RPC_CHANNELS.llmConnections.REFRESH_MODELS,
+  RPC_CHANNELS.llmConnections.GET_API_KEY,
+  RPC_CHANNELS.chatgpt.START_OAUTH,
+  RPC_CHANNELS.chatgpt.COMPLETE_OAUTH,
+  RPC_CHANNELS.chatgpt.CANCEL_OAUTH,
+  RPC_CHANNELS.chatgpt.LOGOUT,
+  RPC_CHANNELS.copilot.START_OAUTH,
+  RPC_CHANNELS.copilot.CANCEL_OAUTH,
+  RPC_CHANNELS.copilot.LOGOUT,
+  RPC_CHANNELS.sessions.SET_MODEL,
+])
+
 // ---------------------------------------------------------------------------
 // Create WebUI handler early so it can be embedded in the WsRpcServer.
 // The handler is a pure function — it doesn't need the session manager yet
@@ -210,6 +232,15 @@ const instance = await (async () => {
       validateSessionCookie: webuiHandler
         ? async (cookieHeader) => (await webuiHandler!.validateSessionCookie(cookieHeader)) !== null
         : undefined,
+      // Keep the verified account role with the WebSocket connection. The
+      // browser cannot elevate it by changing a request field or route.
+      ...(teamWorkbench ? {
+        resolveSessionContext: async (cookieHeader: string | null) => teamWorkbench!.authProvider.validateSession(cookieHeader),
+        authorizeRequest: (identity: unknown, channel: string) => {
+          if (!organizationModelAdminChannels.has(channel)) return true
+          return (identity as { role?: string } | undefined)?.role === 'admin'
+        },
+      } : {}),
       // In team browser mode the server signing secret never acts as a user
       // credential. Only the WebUI's account-backed session cookie can open a
       // client connection, so merely knowing a legacy server token is not an

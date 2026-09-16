@@ -25,7 +25,7 @@
 - **密钥不落库**：运行时经 `CredentialReader` 获取引用，嵌入 Craft 时可复用其 Credential Manager；Python/MCP 子进程只拿到本 Agent 已声明的凭据别名。
 - **结果映射**：统一提取 HTTP / Dify / Coze / Python / MCP 返回中的可读文本与文件链接，同时递归遮盖疑似 Token、API Key、密码等字段；Craft 对话和工作台不会再只看到“Agent completed”。
 - **隐私友好的用量账本**：每次执行记录 Agent 标识、类型、时长、成功/失败、输入/输出字节数及上游可选 token 数；Web 工作台调用还会记录不可逆的账号 ID 与部门 ID 维度，不保存提示词、结果正文、端点或密钥。
-- **Craft 原生工作台与团队后台**：在 Craft 左侧导航加入全宽“AI 工作台”。成员只能运行管理员已配置且已就绪的 Agent；管理员可开通/禁用账号、维护部门、查看部门和个人聚合用量、编辑 Manifest，并录入 AES-256-GCM 加密的 Key 引用。页面不会回显 Key。
+- **Craft 原生工作台与团队后台**：浏览器与桌面端共用 Craft 的对话、会话和 Workspace；左侧“AI 工作台”是同一界面内的业务入口，而非替代 Craft 的独立门户。成员可直接调用获授权 Agent、查看“我的用量”；管理员额外可开通/禁用账号、维护部门、查看部门/个人/Agent 聚合用量、编辑 Manifest，并录入 AES-256-GCM 加密的 Key 引用。页面不会回显 Key。
 - **执行策略**：每个 Agent 可配置有限次数重试、指数退避、滑动窗口限流以及日调用 / Token 配额。策略在运行时执行，持久化用量账本用于重启后的配额判断。
 - **可展示的质量证据**：固定合成输入的章节降级 Trace/Benchmark 断言模型失败仍返回连续四章节；Case Memory 以不可逆指纹沉淀成功调用与失败处理策略，避免把业务正文写入观测数据。独立 GitHub Actions 会执行 TypeScript 检查、合成测试并上传脱敏评测制品。
 - **任务与访问边界**：每个任务独占 `inputs/`、`outputs/`、`tmp/`；路径越界被拒绝。账号冻结会使已签发凭据失效、关闭长连接、清理授权缓存并在调用前复核状态。
@@ -44,6 +44,17 @@ npm test
 ```
 
 复制 [`config/agents.example.json`](business/agent-workbench/config/agents.example.json) 到仓库外的受控路径，按你的密钥管理方案填入**引用名或部署配置**，不要提交实际 Key。示例含视频解析、Fish 兼容音色、Python 话术清洗、Dify 文案和外部 MCP Agent。
+
+管理员可以在 Craft 的“AI 工作台 → Agent 配置”内加密录入 `DIFY_API_KEY`、`FISH_API_KEY`、模型服务 Key 等，再在 Manifest 中只引用其名称。若要限定某项能力的部门或角色，在 Agent 项目中声明：
+
+```json
+"access": {
+  "departmentIds": ["部门 ID"],
+  "roles": ["member"]
+}
+```
+
+该限制会同时作用于 Agent 列表与调用接口；即使成员绕过前端直接请求，服务端仍会拒绝未授权调用。管理员始终保留配置与审计权限。
 
 以独立 MCP 服务加载该配置：
 
@@ -92,7 +103,7 @@ $env:AGENT_WORKBENCH_ROOT = 'D:\safe\craft-agent-workbench'
 bun run server:prod
 ```
 
-`AGENT_WORKBENCH_ROOT` 下会保留加密 Key 库、Manifest、团队目录、无原文用量 JSONL 和无原文 Case Memory JSONL；单实例演示默认用受限权限 JSON 文件持久化。生产多实例需要把团队目录/用量账本替换为 PostgreSQL 等共享存储，并在反向代理层强制 HTTPS/WSS。
+`AGENT_WORKBENCH_ROOT` 下会保留加密 Key 库、Manifest、团队目录、无原文用量 JSONL 和无原文 Case Memory JSONL；单实例演示默认用受限权限 JSON 文件持久化。成员只能看到自己的调用与按 Agent 聚合；管理员可查看部门、人员和 Agent 聚合。Token 仅在下游服务返回 usage 时入账，不会用估算值伪造。生产多实例需要把团队目录/用量账本替换为 PostgreSQL 等共享存储，并在反向代理层强制 HTTPS/WSS。
 
 ### 真实外部 Agent 沙箱验收
 

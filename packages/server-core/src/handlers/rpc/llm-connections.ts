@@ -10,13 +10,24 @@ import {
 import { getModelRefreshService } from '@craft-agent/server-core/model-fetchers'
 import { parseTestConnectionError, createBuiltInConnection, validateModelList, piAuthProviderDisplayName, validateSetupTestInput, setupTestRequiresApiKey, resolveCustomEndpointSetup } from '@craft-agent/server-core/domain'
 import { getWorkspaceOrThrow, buildBackendHostRuntimeContext } from '@craft-agent/server-core/handlers'
-import { pushTyped, type RpcServer } from '@craft-agent/server-core/transport'
+import { pushTyped, type RpcServer, type RequestContext } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
 import { randomUUID } from 'node:crypto'
 import { CLIENT_OPEN_EXTERNAL } from '@craft-agent/server-core/transport'
 
 // Local OAuth state
 let copilotOAuthAbort: AbortController | null = null
+
+/** A team member receives just the centrally selected connection/model. */
+function isOrganizationMember(ctx: RequestContext): boolean {
+  const role = (ctx.sessionContext as { role?: unknown } | undefined)?.role
+  return typeof role === 'string' && role !== 'admin'
+}
+
+function memberConnectionView(connection: LlmConnection): LlmConnection {
+  if (!connection.defaultModel) return connection
+  return { ...connection, models: [connection.defaultModel] }
+}
 
 export const HANDLED_CHANNELS = [
   RPC_CHANNELS.llmConnections.LIST,
@@ -416,17 +427,23 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
   // ============================================================
 
   // List all LLM connections (includes built-in and custom)
-  server.handle(RPC_CHANNELS.llmConnections.LIST, async (): Promise<LlmConnection[]> => {
-    return getLlmConnections()
+  server.handle(RPC_CHANNELS.llmConnections.LIST, async (ctx): Promise<LlmConnection[]> => {
+    const connections = getLlmConnections()
+    if (!isOrganizationMember(ctx)) return connections
+    const current = connections.find((connection) => connection.slug === getDefaultLlmConnection())
+    return current ? [memberConnectionView(current)] : []
   })
 
   // List all LLM connections with authentication status
-  server.handle(RPC_CHANNELS.llmConnections.LIST_WITH_STATUS, async (): Promise<LlmConnectionWithStatus[]> => {
+  server.handle(RPC_CHANNELS.llmConnections.LIST_WITH_STATUS, async (ctx): Promise<LlmConnectionWithStatus[]> => {
     const connections = getLlmConnections()
     const credentialManager = getCredentialManager()
     const defaultSlug = getDefaultLlmConnection()
 
-    return Promise.all(connections.map(async (conn): Promise<LlmConnectionWithStatus> => {
+    const visible = isOrganizationMember(ctx)
+      ? connections.filter((connection) => connection.slug === defaultSlug).map(memberConnectionView)
+      : connections
+    return Promise.all(visible.map(async (conn): Promise<LlmConnectionWithStatus> => {
       // Check if credentials exist for this connection
       const hasCredentials = await credentialManager.hasLlmCredentials(conn.slug, conn.authType)
       return {
@@ -438,8 +455,11 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
   })
 
   // Get a specific LLM connection by slug
-  server.handle(RPC_CHANNELS.llmConnections.GET, async (_ctx, slug: string): Promise<LlmConnection | null> => {
-    return getLlmConnection(slug)
+  server.handle(RPC_CHANNELS.llmConnections.GET, async (ctx, slug: string): Promise<LlmConnection | null> => {
+    const connection = getLlmConnection(slug)
+    if (!connection) return null
+    if (isOrganizationMember(ctx) && slug !== getDefaultLlmConnection()) return null
+    return isOrganizationMember(ctx) ? memberConnectionView(connection) : connection
   })
 
   // Get stored API key for an LLM connection (masked — for edit form display only)

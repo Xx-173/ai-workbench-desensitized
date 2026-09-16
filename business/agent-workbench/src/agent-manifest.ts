@@ -72,6 +72,14 @@ export interface AgentExecutionPolicy {
   readonly cost?: CostPolicy;
 }
 
+/** Server-enforced visibility for employee-facing Agent catalogues. */
+export interface AgentAccessPolicy {
+  /** Opaque TeamDirectory department ids; omitted means every department. */
+  readonly departmentIds?: readonly string[];
+  /** Omitted means both authenticated roles; administrators always retain management access. */
+  readonly roles?: readonly ('admin' | 'member')[];
+}
+
 export interface AgentManifest {
   readonly id: string;
   readonly toolName: string;
@@ -81,6 +89,7 @@ export interface AgentManifest {
   readonly credentials?: readonly CredentialBinding[];
   readonly timeoutMs?: number;
   readonly policy?: AgentExecutionPolicy;
+  readonly access?: AgentAccessPolicy;
   readonly config: HttpAgentConfig | PythonAgentConfig | McpAgentConfig;
 }
 
@@ -203,6 +212,25 @@ function parsePolicy(value: unknown, id: string): AgentExecutionPolicy | undefin
   };
 }
 
+function parseAccess(value: unknown, id: string): AgentAccessPolicy | undefined {
+  if (value === undefined) return undefined;
+  if (!isObject(value)) throw new Error(`Invalid agent config: ${id}.access must be an object`);
+  const departmentIds = value.departmentIds;
+  const roles = value.roles;
+  if (departmentIds !== undefined && (!Array.isArray(departmentIds) || !departmentIds.every((item) => typeof item === 'string' && /^[A-Za-z0-9-]{1,128}$/.test(item)))) {
+    throw new Error(`Invalid agent config: ${id}.access.departmentIds must be safe ids`);
+  }
+  if (roles !== undefined && (!Array.isArray(roles) || !roles.every((item) => item === 'admin' || item === 'member'))) {
+    throw new Error(`Invalid agent config: ${id}.access.roles must contain admin/member`);
+  }
+  const uniqueDepartments = departmentIds === undefined ? undefined : [...new Set(departmentIds as string[])];
+  const uniqueRoles = roles === undefined ? undefined : [...new Set(roles as Array<'admin' | 'member'>)];
+  return {
+    ...(uniqueDepartments?.length ? { departmentIds: uniqueDepartments } : {}),
+    ...(uniqueRoles?.length ? { roles: uniqueRoles } : {}),
+  };
+}
+
 function parseManifest(value: unknown, index: number): AgentManifest {
   if (!isObject(value)) throw new Error(`Invalid agent config: agents[${index}] must be an object`);
   const id = expectIdentifier(value.id, `agents[${index}].id`);
@@ -211,6 +239,7 @@ function parseManifest(value: unknown, index: number): AgentManifest {
   if (kind !== 'http' && kind !== 'python' && kind !== 'mcp') throw new Error(`Invalid agent config: ${id}.kind`);
   if (!isObject(value.config)) throw new Error(`Invalid agent config: ${id}.config`);
   const policy = parsePolicy(value.policy, id);
+  const access = parseAccess(value.access, id);
   const common = {
     id,
     toolName,
@@ -219,6 +248,7 @@ function parseManifest(value: unknown, index: number): AgentManifest {
     inputSchema: parseSchema(value.inputSchema, id),
     ...(parseCredentials(value.credentials, id) ? { credentials: parseCredentials(value.credentials, id) } : {}),
     ...(policy && Object.keys(policy).length ? { policy } : {}),
+    ...(access && Object.keys(access).length ? { access } : {}),
     ...(value.timeoutMs === undefined ? {} : {
       timeoutMs: typeof value.timeoutMs === 'number' && Number.isInteger(value.timeoutMs) && value.timeoutMs >= 1_000 && value.timeoutMs <= 300_000
         ? value.timeoutMs

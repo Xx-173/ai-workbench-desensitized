@@ -17,10 +17,18 @@ import { JsonlCaseMemory } from '../src/case-memory.ts';
 import { mapAgentResult } from '../src/result-mapper.ts';
 import { TeamDirectory, type AccountStatus, type TeamRole, type TeamUser } from '../src/team-directory.ts';
 import type { JsonObject, JsonValue, ToolContext } from '../src/ports.ts';
+import type { AgentManifest } from '../src/agent-manifest.ts';
 
 const SESSION_COOKIE = 'craft_team_session';
 const SESSION_SECONDS = 8 * 60 * 60;
 const BODY_LIMIT = 1_000_000;
+
+class ForbiddenError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ForbiddenError';
+  }
+}
 
 export interface TeamIdentity {
   readonly userId: string;
@@ -241,15 +249,16 @@ class TeamWorkbenchApi implements WorkbenchHttpApi {
       }
       return json({ error: 'Not found' }, 404);
     } catch (error) {
-      return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+      return json({ error: error instanceof Error ? error.message : String(error) }, error instanceof ForbiddenError ? 403 : 400);
     }
   }
 
   private async bootstrap(identity: TeamIdentity) {
     const config = await this.plane.getConfig();
-    const agents = await Promise.all(config.agents.map(async (agent) => ({
+    const visibleAgents = config.agents.filter((agent) => this.canUseAgent(identity, agent));
+    const agents = await Promise.all(visibleAgents.map(async (agent) => ({
       id: agent.id, toolName: agent.toolName, description: agent.description, kind: agent.kind,
-      inputSchema: agent.inputSchema, health: await this.plane.checkAgent(agent.id),
+      inputSchema: agent.inputSchema, access: agent.access, health: await this.plane.checkAgent(agent.id),
     })));
     return {
       identity,
@@ -267,6 +276,7 @@ class TeamWorkbenchApi implements WorkbenchHttpApi {
     const config = await this.plane.getConfig();
     const agent = config.agents.find((entry) => entry.id === agentId);
     if (!agent) throw new Error('Unknown agent');
+    if (!this.canUseAgent(identity, agent)) throw new ForbiddenError('You are not allowed to use this Agent');
     const context: ToolContext = {
       sessionId: `web-${identity.userId}-${Date.now()}`,
       taskId: `web-${identity.userId}-${Date.now()}`,
@@ -305,27 +315,37 @@ class TeamWorkbenchApi implements WorkbenchHttpApi {
 
   private async usageFor(userId: string) {
     const events = (await this.usage.listSince(new Date(0))).filter((event) => event.userId === userId);
-    return eventTotals(events);
+    const byAgent = this.groupUsage(events, (event) => event.agentId, (id) => id);
+    return { ...eventTotals(events), byAgent };
   }
 
   private async teamUsage() {
     const events = await this.usage.listSince(new Date(0));
     const departments = new Map(this.directory.listDepartments().map((department) => [department.id, department.name]));
     const users = new Map(this.directory.listUsers().map((user) => [user.id, user]));
-    const group = <T extends string>(key: (event: AgentUsageEvent) => T, name: (id: T) => string) => {
-      const groups = new Map<T, AgentUsageEvent[]>();
-      for (const event of events) {
-        const id = key(event);
-        groups.set(id, [...(groups.get(id) ?? []), event]);
-      }
-      return [...groups.entries()].map(([id, values]) => ({ id, name: name(id), ...eventTotals(values) })).sort((a, b) => b.calls - a.calls);
-    };
     return {
       total: eventTotals(events),
-      byDepartment: group((event) => event.departmentId ?? 'unassigned', (id) => departments.get(id) ?? '未分配'),
-      byUser: group((event) => event.userId ?? 'unknown', (id) => users.get(id)?.displayName ?? '未知账号'),
-      byAgent: group((event) => event.agentId, (id) => id),
+      byDepartment: this.groupUsage(events, (event) => event.departmentId ?? 'unassigned', (id) => departments.get(id) ?? '未分配'),
+      byUser: this.groupUsage(events, (event) => event.userId ?? 'unknown', (id) => users.get(id)?.displayName ?? '未知账号'),
+      byAgent: this.groupUsage(events, (event) => event.agentId, (id) => id),
     };
+  }
+
+  private canUseAgent(identity: TeamIdentity, agent: AgentManifest): boolean {
+    if (identity.role === 'admin') return true;
+    const access = agent.access;
+    if (!access) return true;
+    if (access.roles && !access.roles.includes(identity.role)) return false;
+    return !access.departmentIds || access.departmentIds.includes(identity.departmentId);
+  }
+
+  private groupUsage<T extends string>(events: readonly AgentUsageEvent[], key: (event: AgentUsageEvent) => T, name: (id: T) => string) {
+    const groups = new Map<T, AgentUsageEvent[]>();
+    for (const event of events) {
+      const id = key(event);
+      groups.set(id, [...(groups.get(id) ?? []), event]);
+    }
+    return [...groups.entries()].map(([id, values]) => ({ id, name: name(id), ...eventTotals(values) })).sort((a, b) => b.calls - a.calls);
   }
 }
 

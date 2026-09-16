@@ -158,11 +158,13 @@ test('the parser accepts generic HTTP, Python and MCP manifests but rejects dupl
       { id: 'a', toolName: 'a_tool', description: 'A', kind: 'http', policy: { retry: { maxAttempts: 2, backoffMs: 0 }, rateLimit: { maxRequests: 3, windowMs: 1000 }, quota: { maxCallsPerDay: 10 }, cost: { inputPerMillion: 1, currency: 'USD' } }, inputSchema: { type: 'object', properties: {} }, config: { baseUrlEnv: 'A_BASE_URL', path: '/run' } },
       { id: 'b', toolName: 'b_tool', description: 'B', kind: 'python', inputSchema: { type: 'object', properties: {} }, config: { command: 'python' } },
       { id: 'c', toolName: 'c_tool', description: 'C', kind: 'mcp', inputSchema: { type: 'object', properties: {} }, config: { command: 'node', toolName: 'run_task' } },
+      { id: 'd', toolName: 'd_tool', description: 'D', kind: 'python', access: { departmentIds: ['department-1'], roles: ['member'] }, inputSchema: { type: 'object', properties: {} }, config: { command: 'python' } },
     ],
   });
-  assert.equal(parsed.agents.length, 3);
+  assert.equal(parsed.agents.length, 4);
   assert.equal(parsed.agents[2]?.kind, 'mcp');
   assert.equal(parsed.agents[0]?.policy?.rateLimit?.maxRequests, 3);
+  assert.deepEqual(parsed.agents[3]?.access, { departmentIds: ['department-1'], roles: ['member'] });
   assert.deepEqual(collectCredentialReferenceNames([httpAgent, {
     id: 'cleaner', toolName: 'cleaner_tool', description: 'x', kind: 'python',
     credentials: [{ name: 'TOKEN', source: 'CLEANER_TOKEN' }],

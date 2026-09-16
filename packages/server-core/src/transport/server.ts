@@ -52,6 +52,8 @@ interface ClientConnection {
   lastAckedSeq: number
   /** Highest per-client seq assigned to this client. */
   lastSentSeq: number
+  /** Identity resolved from an authenticated browser cookie, never client supplied. */
+  sessionContext?: unknown
 }
 
 interface PendingInvoke {
@@ -91,6 +93,10 @@ export interface WsRpcServerOptions {
    * If provided, a valid session cookie is accepted as an alternative to a bearer token.
    */
   validateSessionCookie?: (cookieHeader: string | null) => Promise<boolean>
+  /** Resolve browser-session metadata once during handshake (for example a team role). */
+  resolveSessionContext?: (cookieHeader: string | null) => Promise<unknown | null>
+  /** Optional server-side authorization gate for individual RPC channels. */
+  authorizeRequest?: (sessionContext: unknown | undefined, channel: string, context: RequestContext) => Promise<boolean> | boolean
   /** Server identity stamp on outgoing events. Default: 'local' */
   serverId?: string
   /** TLS configuration. When provided, the server listens on wss:// instead of ws://. */
@@ -138,6 +144,8 @@ export class WsRpcServer implements RpcServer {
   private readonly requireAuth: boolean
   private readonly validateToken: ((token: string) => Promise<boolean>) | null
   private readonly validateSessionCookie: ((cookieHeader: string | null) => Promise<boolean>) | null
+  private readonly resolveSessionContext: ((cookieHeader: string | null) => Promise<unknown | null>) | null
+  private readonly authorizeRequest: WsRpcServerOptions['authorizeRequest'] | null
   private readonly serverId: string
   private readonly tlsOptions: WsRpcTlsOptions | null
   private readonly serverVersion: string
@@ -152,6 +160,8 @@ export class WsRpcServer implements RpcServer {
     this.requireAuth = opts?.requireAuth ?? false
     this.validateToken = opts?.validateToken ?? null
     this.validateSessionCookie = opts?.validateSessionCookie ?? null
+    this.resolveSessionContext = opts?.resolveSessionContext ?? null
+    this.authorizeRequest = opts?.authorizeRequest ?? null
     this.serverId = opts?.serverId ?? 'local'
     this.serverVersion = opts?.serverVersion ?? ''
     this.tlsOptions = opts?.tls ?? null
@@ -427,6 +437,7 @@ export class WsRpcServer implements RpcServer {
         }
 
         // Auth check — bearer token OR session cookie (web UI)
+        let sessionContext: unknown | undefined
         if (this.requireAuth) {
           let authenticated = false
 
@@ -435,7 +446,14 @@ export class WsRpcServer implements RpcServer {
             authenticated = await this.validateToken(envelope.token)
           }
 
-          // 2. Fallback: try session cookie from HTTP upgrade request (web UI path)
+          // 2. Fallback: resolve a signed browser session once on the server.
+          // The returned metadata is never taken from the browser payload.
+          if (!authenticated && this.resolveSessionContext && upgradeRequestCookie) {
+            sessionContext = await this.resolveSessionContext(upgradeRequestCookie) ?? undefined
+            authenticated = sessionContext !== undefined
+          }
+
+          // 3. Backwards-compatible boolean cookie validator.
           if (!authenticated && this.validateSessionCookie && upgradeRequestCookie) {
             authenticated = await this.validateSessionCookie(upgradeRequestCookie)
           }
@@ -567,6 +585,7 @@ export class WsRpcServer implements RpcServer {
           eventBuffer: [],
           lastAckedSeq: 0,
           lastSentSeq: 0,
+          ...(sessionContext !== undefined ? { sessionContext } : {}),
         }
         this.clients.set(clientId, client)
         handshakeCompleted = true
@@ -657,6 +676,12 @@ export class WsRpcServer implements RpcServer {
       clientId: client.id,
       workspaceId: client.workspaceId,
       webContentsId: client.webContentsId,
+      ...(client.sessionContext !== undefined ? { sessionContext: client.sessionContext } : {}),
+    }
+
+    if (this.authorizeRequest && !await this.authorizeRequest(client.sessionContext, channel, ctx)) {
+      this.sendResponseError(client.ws, id, channel, 'HANDLER_ERROR', 'This account is not allowed to change organization AI settings')
+      return
     }
 
     try {

@@ -43,7 +43,7 @@
 
 ## Craft 原生工作台与团队模式
 
-启用 `CRAFT_TEAM_MODE=true` 后，Craft WebUI 登录改为管理员开通的“用户名 + 密码”。账号密码使用 scrypt 加盐哈希，浏览器使用 HttpOnly / SameSite 会话 Cookie；每次 HTTP 请求和新的 WebSocket 握手都会校验账号仍处于启用状态。管理员可在 Craft 左侧“AI 工作台”中维护部门、创建/禁用人员账号、查看部门/个人聚合用量，并安全配置 Agent。
+启用 `CRAFT_TEAM_MODE=true` 后，Craft WebUI 登录改为管理员开通的“用户名 + 密码”。账号密码使用 scrypt 加盐哈希，浏览器使用 HttpOnly / SameSite 会话 Cookie；每次 HTTP 请求和新的 WebSocket 握手都会校验账号仍处于启用状态。浏览器仍加载 Craft 原生对话、会话与 Workspace；管理员可在左侧“AI 工作台”内维护部门、创建/禁用人员账号、查看部门/个人/Agent 聚合用量，并安全配置 Agent；普通成员只显示获授权 Agent 和自己的用量。
 
 团队目录默认是单 Craft Server 实例的受限权限 JSON 文件，方便本地/单机演示。生产多实例部署应以实现相同接口的 PostgreSQL / 企业 SSO 替换，并经由 HTTPS/WSS 反向代理提供浏览器访问。
 
@@ -58,6 +58,14 @@ npm run serve:control -- --workspace-root D:\safe\agent-workspace
 ```
 
 控制中心提供：Manifest 编辑/校验、Dify / Fish / Coze 等配置引用录入、配置完整性检查、重试/限流/配额/成本策略编辑，以及无原文用量看板。其健康检查只核验本地配置与引用完整性，不会在没有明确用户操作的情况下向第三方发送请求。
+
+Manifest 可选 `access` 字段，用于服务端授权：
+
+```json
+"access": { "departmentIds": ["部门 ID"], "roles": ["member"] }
+```
+
+它不是前端筛选：运行时会在列出 Agent 与调用 Agent 两处执行相同校验。管理员总可管理和审计；Token 数据只在被调用服务返回 usage 时记录。
 
 将 MCP Server 指向同一状态目录：
 
