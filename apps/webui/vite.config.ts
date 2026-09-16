@@ -1,19 +1,10 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import tailwindcss from '@tailwindcss/vite'
 import { resolve } from 'path'
 
 export default defineConfig({
   plugins: [
-    react({
-      babel: {
-        plugins: [
-          'jotai/babel/plugin-debug-label',
-          ['jotai/babel/plugin-react-refresh', { customAtomNames: ['atomFamily'] }],
-        ],
-      },
-    }),
-    tailwindcss(),
+    react(),
   ],
   root: resolve(__dirname, 'src'),
   base: './',

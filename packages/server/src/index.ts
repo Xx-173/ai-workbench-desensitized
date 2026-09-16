@@ -122,7 +122,6 @@ const webuiEnabled = webuiDir && existsSync(webuiDir)
 const webuiSecureCookies = parseOptionalBooleanEnv('CRAFT_WEBUI_SECURE_COOKIE', process.env.CRAFT_WEBUI_SECURE_COOKIE)
 const webuiWsUrl = parseOptionalWebSocketUrl('CRAFT_WEBUI_WS_URL', process.env.CRAFT_WEBUI_WS_URL)
 const serverToken = process.env.CRAFT_SERVER_TOKEN
-
 // Company/team mode is intentionally opt-in.  It replaces the historical
 // shared WebUI password with admin-provisioned accounts and mounts the
 // authenticated Agent Workbench APIs on the same Craft server.

@@ -225,30 +225,30 @@
 </head>
 <body>
   <div class="card">
-    <h1>Craft Agents</h1>
-    <p class="subtitle">Use the account issued by your administrator. Personal credentials are never shared with other departments.</p>
+    <h1>智能工作台</h1>
+    <p class="subtitle">使用管理员开通的部门账号登录</p>
 
     <form id="login-form">
-      <label for="username">Username <span style="font-weight:400;opacity:.6">(team mode)</span></label>
+      <label for="username">账号</label>
       <input
         id="username"
         name="username"
         type="text"
-        placeholder="e.g. li.na"
+        placeholder="请输入账号"
         autocomplete="username"
+        autofocus
+        required
       >
-      <div style="height:14px"></div>
-      <label for="password">Password / Server Token</label>
+      <label for="password">密码</label>
       <input
         id="password"
         name="password"
         type="password"
-        placeholder="Enter password"
+        placeholder="请输入密码"
         autocomplete="current-password"
-        autofocus
         required
       >
-      <button type="submit" id="submit-btn">Sign In</button>
+      <button type="submit" id="submit-btn">登录工作台</button>
     </form>
 
     <div id="error" class="error"></div>
@@ -263,7 +263,7 @@
       e.preventDefault();
       errorEl.classList.remove('visible');
       submitBtn.disabled = true;
-      submitBtn.textContent = 'Signing in...';
+      submitBtn.textContent = '登录中…';
 
       try {
         const username = document.getElementById('username').value;
@@ -281,14 +281,14 @@
         }
 
         const data = await res.json().catch(() => ({}));
-        errorEl.textContent = data.error || 'Authentication failed';
+        errorEl.textContent = data.error || '登录失败';
         errorEl.classList.add('visible');
       } catch (err) {
-        errorEl.textContent = 'Network error — is the server running?';
+        errorEl.textContent = '网络异常，请确认服务正在运行';
         errorEl.classList.add('visible');
       } finally {
         submitBtn.disabled = false;
-        submitBtn.textContent = 'Sign In';
+        submitBtn.textContent = '登录工作台';
       }
     });
   </script>

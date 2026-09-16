@@ -290,7 +290,7 @@ export function createWebuiHandler(options: WebuiHandlerOptions): WebuiHandler {
         )
       }
 
-      let body: { username?: string, password?: string }
+      let body: { username?: string; password?: string }
       try {
         body = await req.json() as { password?: string }
       } catch {
