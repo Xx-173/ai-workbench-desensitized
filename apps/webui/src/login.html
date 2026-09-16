@@ -226,15 +226,24 @@
 <body>
   <div class="card">
     <h1>Craft Agents</h1>
-    <p class="subtitle">Enter your server token to continue</p>
+    <p class="subtitle">Use the account issued by your administrator. Personal credentials are never shared with other departments.</p>
 
     <form id="login-form">
-      <label for="password">Server Token</label>
+      <label for="username">Username <span style="font-weight:400;opacity:.6">(team mode)</span></label>
+      <input
+        id="username"
+        name="username"
+        type="text"
+        placeholder="e.g. li.na"
+        autocomplete="username"
+      >
+      <div style="height:14px"></div>
+      <label for="password">Password / Server Token</label>
       <input
         id="password"
         name="password"
         type="password"
-        placeholder="Enter CRAFT_SERVER_TOKEN"
+        placeholder="Enter password"
         autocomplete="current-password"
         autofocus
         required
@@ -257,11 +266,12 @@
       submitBtn.textContent = 'Signing in...';
 
       try {
+        const username = document.getElementById('username').value;
         const password = document.getElementById('password').value;
         const res = await fetch('/api/auth', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password }),
+          body: JSON.stringify({ username, password }),
         });
 
         if (res.ok) {

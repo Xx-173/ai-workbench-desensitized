@@ -10,6 +10,7 @@
  */
 
 import type { InputSchema, JsonObject, JsonValue, ToolContext, ToolResult } from './ports.ts';
+import { mapAgentResult } from './result-mapper.ts';
 
 export type CapabilityId = string;
 
@@ -139,7 +140,19 @@ export class CapabilityRegistry {
   async invokeAsTool(id: CapabilityId, ctx: ToolContext, input: JsonObject): Promise<ToolResult> {
     try {
       const result = await this.invoke(id, ctx, input);
-      return { content: JSON.stringify({ summary: result.summary, artifacts: result.artifacts ?? [] }), isError: false };
+      const mapped = result.raw === undefined ? undefined : mapAgentResult(result.raw);
+      // Keep the stable summary/artifact fields used by existing callers, but
+      // now return the actual vendor output as well. This is what lets a Craft
+      // conversation use the result rather than merely seeing "completed".
+      return {
+        content: JSON.stringify({
+          summary: result.summary,
+          artifacts: [...new Set([...(result.artifacts ?? []), ...(mapped?.artifacts ?? [])])],
+          ...(mapped?.text ? { output: mapped.text } : {}),
+          ...(mapped ? { data: mapped.data, truncated: mapped.truncated } : {}),
+        }),
+        isError: false,
+      };
     } catch (err) {
       return {
         content: err instanceof Error ? `${err.name}: ${err.message}` : String(err),

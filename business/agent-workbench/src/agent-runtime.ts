@@ -240,6 +240,8 @@ export function createAgentEntries(
           outputBytes: output === undefined ? 0 : jsonByteLength(output),
           ...(attempts > 1 ? { attempts } : {}),
           ...(output === undefined ? {} : extractUsage(output)),
+          ...(ctx.actor?.userId ? { userId: ctx.actor.userId } : {}),
+          ...(ctx.actor?.departmentId ? { departmentId: ctx.actor.departmentId } : {}),
         };
         await dependencies.usageRecorder?.record(event);
       }

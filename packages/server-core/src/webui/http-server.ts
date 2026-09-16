@@ -118,6 +118,35 @@ export interface OAuthCallbackDeps {
   pushSourcesChanged: (workspaceId: string) => void
 }
 
+/** Identity carried by an authenticated browser session. */
+export interface WebuiIdentity {
+  readonly userId: string
+  readonly username: string
+  readonly displayName?: string
+  readonly departmentId?: string
+  readonly role?: string
+}
+
+/**
+ * Optional replacement for Craft's historical single shared-password login.
+ * The server package supplies this in team mode; server-core remains neutral
+ * about storage (file, database, SSO) and only enforces the returned session.
+ */
+export interface WebuiAuthProvider {
+  authenticate: (
+    credentials: { username?: string; password: string },
+    requestInfo: { ip: string },
+  ) => Promise<{ identity: WebuiIdentity; token: string } | null>
+  validateSession: (cookieHeader: string | null) => Promise<WebuiIdentity | null>
+  buildSessionCookie: (token: string, secure: boolean) => string
+  buildLogoutCookie: (secure: boolean) => string
+}
+
+/** Optional authenticated extension surface for a business module. */
+export interface WebuiAuthenticatedApi {
+  fetch: (request: Request, identity: WebuiIdentity) => Promise<Response | null>
+}
+
 export interface WebuiHandlerOptions {
   /** Path to built web UI dist/ directory. */
   webuiDir: string
@@ -145,6 +174,10 @@ export interface WebuiHandlerOptions {
    * and 'direct' is used as the rate-limit key.
    */
   trustedProxies?: string[]
+  /** Team/SSO authentication provider. Omit to retain the one-password mode. */
+  authProvider?: WebuiAuthProvider
+  /** Authenticated business API mounted under its own path. */
+  authenticatedApi?: WebuiAuthenticatedApi
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +191,8 @@ export interface WebuiHandler {
   dispose: () => void
   /** Inject OAuth callback deps after bootstrap (lazy wiring). */
   setOAuthCallbackDeps: (deps: OAuthCallbackDeps) => void
+  /** Used by the WebSocket server for the same cookie policy as HTTP routes. */
+  validateSessionCookie: (cookieHeader: string | null) => Promise<WebuiIdentity | null>
 }
 
 /**
@@ -178,6 +213,8 @@ export function createWebuiHandler(options: WebuiHandlerOptions): WebuiHandler {
     getHealthCheck,
     logger,
     trustedProxies,
+    authProvider,
+    authenticatedApi,
   } = options
 
   const rateLimiter = new RateLimiter(5, 60_000)
@@ -188,6 +225,12 @@ export function createWebuiHandler(options: WebuiHandlerOptions): WebuiHandler {
 
   // Hash the login password at startup (async, but resolves before first auth attempt in practice)
   const passwordReady = initPasswordHash(loginPassword)
+
+  async function sessionIdentity(cookieHeader: string | null): Promise<WebuiIdentity | null> {
+    if (authProvider) return authProvider.validateSession(cookieHeader)
+    const session = await validateSession(cookieHeader, secret)
+    return session ? { userId: session.sub, username: session.sub } : null
+  }
 
   /** Extract client IP — only trusts proxy headers when trustedProxies is configured. */
   function getClientIp(req: Request): string {
@@ -247,7 +290,7 @@ export function createWebuiHandler(options: WebuiHandlerOptions): WebuiHandler {
         )
       }
 
-      let body: { password?: string }
+      let body: { username?: string, password?: string }
       try {
         body = await req.json() as { password?: string }
       } catch {
@@ -256,6 +299,19 @@ export function createWebuiHandler(options: WebuiHandlerOptions): WebuiHandler {
 
       if (!body.password || typeof body.password !== 'string') {
         return Response.json({ error: 'Password is required' }, { status: 400 })
+      }
+
+      if (authProvider) {
+        const authenticated = await authProvider.authenticate({ username: body.username, password: body.password }, { ip })
+        if (!authenticated) {
+          logger.warn(`[webui] Failed team auth attempt from ${ip}`)
+          return Response.json({ error: 'Invalid credentials' }, { status: 401 })
+        }
+        logger.info(`[webui] Successful team auth from ${ip} (${authenticated.identity.username})`)
+        return Response.json({ ok: true, identity: authenticated.identity }, {
+          status: 200,
+          headers: { 'Set-Cookie': authProvider.buildSessionCookie(authenticated.token, useSecureCookies) },
+        })
       }
 
       if (!await verifyPassword(body.password)) {
@@ -279,7 +335,7 @@ export function createWebuiHandler(options: WebuiHandlerOptions): WebuiHandler {
       return new Response(null, {
         status: 204,
         headers: {
-          'Set-Cookie': buildLogoutCookie(useSecureCookies),
+          'Set-Cookie': authProvider ? authProvider.buildLogoutCookie(useSecureCookies) : buildLogoutCookie(useSecureCookies),
         },
       })
     }
@@ -347,7 +403,7 @@ export function createWebuiHandler(options: WebuiHandlerOptions): WebuiHandler {
 
     // ── Config endpoint (requires session cookie) ──
     if (path === '/api/config' && req.method === 'GET') {
-      const configSession = await validateSession(req.headers.get('cookie'), secret)
+      const configSession = await sessionIdentity(req.headers.get('cookie'))
       if (!configSession) {
         return Response.json({ error: 'Unauthorized' }, { status: 401 })
       }
@@ -358,7 +414,7 @@ export function createWebuiHandler(options: WebuiHandlerOptions): WebuiHandler {
 
     // Return the default workspace ID so the webui can include it in the WS handshake
     if (path === '/api/config/workspaces' && req.method === 'GET') {
-      const configSession = await validateSession(req.headers.get('cookie'), secret)
+      const configSession = await sessionIdentity(req.headers.get('cookie'))
       if (!configSession) {
         return Response.json({ error: 'Unauthorized' }, { status: 401 })
       }
@@ -371,7 +427,7 @@ export function createWebuiHandler(options: WebuiHandlerOptions): WebuiHandler {
 
     // ── Everything below requires a valid session cookie ──
     const cookieHeader = req.headers.get('cookie')
-    const session = await validateSession(cookieHeader, secret)
+    const session = await sessionIdentity(cookieHeader)
 
     if (!session) {
       const accept = req.headers.get('accept') ?? ''
@@ -379,6 +435,15 @@ export function createWebuiHandler(options: WebuiHandlerOptions): WebuiHandler {
         return Response.redirect('/login', 302)
       }
       return Response.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    if (path === '/api/auth/me' && req.method === 'GET') {
+      return Response.json({ identity: session }, { headers: { 'cache-control': 'no-store' } })
+    }
+
+    if (authenticatedApi) {
+      const extensionResponse = await authenticatedApi.fetch(req, session)
+      if (extensionResponse) return extensionResponse
     }
 
     // ── Serve SPA static files ──
@@ -408,6 +473,7 @@ export function createWebuiHandler(options: WebuiHandlerOptions): WebuiHandler {
     setOAuthCallbackDeps: (deps: OAuthCallbackDeps) => {
       options.oauthCallbackDeps = deps
     },
+    validateSessionCookie: sessionIdentity,
   }
 }
 

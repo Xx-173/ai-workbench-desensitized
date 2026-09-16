@@ -1,6 +1,6 @@
 # 多 Agent 接入与治理工作台 · 业务层
 
-> **这是在 [Craft Agents](https://github.com/craft-ai-agents/craft-agents-oss) 上新增的业务层，不改动其 Agent Runtime。**
+> **这是在 [Craft Agents](https://github.com/craft-ai-agents/craft-agents-oss) 上新增的业务层；它通过最小 WebUI / Server 接线成为 Craft 内的原生“AI 工作台”，不改动其 Agent Runtime。**
 > 它将不同实现形态的 Agent 统一纳入一个受控注册、凭据引用和用量统计平面。
 
 ## 归属边界
@@ -11,7 +11,8 @@
 | 结构化 Session 上下文、凭据管理接口、Agent 事件契约 | Craft 底座 |
 | Agent Manifest、输入校验、HTTP / Python / MCP 执行适配 | 本业务层新增 |
 | 按 Agent 显式引用凭据、受限子进程环境、用量 JSONL 账本 | 本业务层新增 |
-| 任务产物隔离、章节聚合规则回退、访问撤销 | 本业务层新增 |
+| 任务产物隔离、章节聚合规则回退、访问撤销、结果映射 | 本业务层新增 |
+| 工作台导航、WebUI 团队认证和受控 HTTP API 挂载 | 本项目对 Craft WebUI / Server 的最小接线修改 |
 
 业务层位于根目录 `business/agent-workbench/`，刻意不加入 `packages/*` 或 `apps/*` workspace，以避免把业务依赖写进上游 `bun.lock`。它通过结构化类型、MCP 和守卫测试与底座接线，而不是修改底座的内置工具数组。
 
@@ -31,9 +32,15 @@
 
 ## 用量与隐私
 
-`usage-ledger.ts` 记录的是：Agent 标识、类型、时间、耗时、成功/失败、输入/输出字节数，以及上游响应中的可选 token 数。不会记录 prompts、结果正文、URL、API Key 或账户标识。
+`usage-ledger.ts` 记录的是：Agent 标识、类型、时间、耗时、成功/失败、输入/输出字节数，以及上游响应中的可选 token 数。经团队工作台发起的调用额外记录账号 ID 和部门 ID，以便只做部门/个人聚合；不会记录 prompts、结果正文、URL 或 API Key。
 
 独立 MCP 服务会把账本写在 `<workspace>/.agent-workbench/usage.jsonl`。嵌入 Craft 时，宿主可将自己的 `UsageRecorder` 传入运行时并同步到其监控或数据库；成本与配额规则仍应由部署方基于实际供应商价格实现。
+
+## Craft 原生工作台与团队模式
+
+启用 `CRAFT_TEAM_MODE=true` 后，Craft WebUI 登录改为管理员开通的“用户名 + 密码”。账号密码使用 scrypt 加盐哈希，浏览器使用 HttpOnly / SameSite 会话 Cookie；每次 HTTP 请求和新的 WebSocket 握手都会校验账号仍处于启用状态。管理员可在 Craft 左侧“AI 工作台”中维护部门、创建/禁用人员账号、查看部门/个人聚合用量，并安全配置 Agent。
+
+团队目录默认是单 Craft Server 实例的受限权限 JSON 文件，方便本地/单机演示。生产多实例部署应以实现相同接口的 PostgreSQL / 企业 SSO 替换，并经由 HTTPS/WSS 反向代理提供浏览器访问。
 
 ## 本地 Control Center
 
@@ -77,15 +84,18 @@ npm run serve:mcp -- --session-id demo-1 --workspace-root /absolute/path/to/work
 | `src/usage-ledger.ts` | 无原文的调用统计、内存与 JSONL 实现 |
 | `src/secret-vault.ts` | AES-256-GCM 本地密钥库；仅返回配置状态 |
 | `src/control-plane.ts` | Manifest、密钥状态与用量/成本看板的控制面 |
+| `src/result-mapper.ts` | 安全映射不同 Agent 返回的文本、文件链接和结构化结果 |
+| `src/team-directory.ts` | 管理员开通账号、部门、密码哈希与禁用状态的单实例目录 |
 | `src/execution-governor.ts` | 重试、限流、日调用 / Token 配额执行器 |
 | `src/capability-registry.ts` | 工具发现、输入校验和统一调用面 |
 | `src/capabilities.ts` | 音色、视频、清洗、质检、文案五个示例实现 |
 | `src/task-workspace.ts` | 任务级 `inputs/outputs/tmp` 隔离与路径防穿越 |
 | `src/account-revocation.ts` | 凭据、连接、执行三层撤销 |
 | `adapter/mcp-server.ts` | stdio MCP Server 与 Manifest 装载 |
+| `adapter/team-workbench.ts` | Web 团队认证、已鉴权执行和部门/个人用量 API |
 | `adapter/session-context-bridge.ts` | Craft Session / Credential Manager 的窄适配 |
 
-测试使用合成数据，不连接真实服务。目前 78 个测试覆盖 Manifest 校验、三种接入形态、凭据缺失、加密密钥库、控制中心、重试/限流/配额、使用量脱敏、MCP、任务隔离、章节降级和上游契约。
+测试使用合成数据，不连接真实服务。目前 81 个测试覆盖 Manifest 校验、三种接入形态、凭据缺失、加密密钥库、控制中心、结果映射、团队目录、团队鉴权 API、重试/限流/配额、使用量脱敏、MCP、任务隔离、章节降级和上游契约。
 
 ## 脱敏与许可证
 

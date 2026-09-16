@@ -89,6 +89,22 @@ test('unconfigured services fail loudly naming the placeholder — never default
   });
 });
 
+test('tool results preserve mapped output while redacting accidental credential echoes', async () => {
+  const registry = new CapabilityRegistry().register({
+    id: 'mapped', toolName: 'mapped_tool', description: 'mapped', transport: 'mcp',
+    inputSchema: { type: 'object', properties: {} },
+    invoke: async () => ({
+      summary: 'done',
+      raw: { data: { outputs: { text: '可直接展示的结果', audio_url: 'https://example.test/audio.mp3' } }, api_key: 'never-return-this' },
+    }),
+  });
+  const result = await registry.invokeAsTool('mapped', { sessionId: 's', workspacePath: '.', credentials: fakeCredentials() }, {});
+  assert.equal(result.isError, false);
+  assert.match(result.content, /可直接展示的结果/);
+  assert.match(result.content, /https:\/\/example\.test\/audio\.mp3/);
+  assert.doesNotMatch(result.content, /never-return-this/);
+});
+
 test('a configured capability runs end to end and writes into the task outputs', async () => {
   await withTempWorkspace(async (dir) => {
     setFetchImplForTest({

@@ -944,6 +944,13 @@ export interface PagesNavigationState {
   rightSidebar?: RightSidebarPanel
 }
 
+/** Full-width native panel for the business Agent Workbench. */
+export interface WorkbenchNavigationState {
+  navigator: 'workbench'
+  details: null
+  rightSidebar?: RightSidebarPanel
+}
+
 /**
  * Unified navigation state
  */
@@ -955,6 +962,7 @@ export type NavigationState =
   | AutomationsNavigationState
   | ProjectsNavigationState
   | PagesNavigationState
+  | WorkbenchNavigationState
 
 export const isSessionsNavigation = (
   state: NavigationState
@@ -983,6 +991,10 @@ export const isProjectsNavigation = (
 export const isPagesNavigation = (
   state: NavigationState
 ): state is PagesNavigationState => state.navigator === 'pages'
+
+export const isWorkbenchNavigation = (
+  state: NavigationState
+): state is WorkbenchNavigationState => state.navigator === 'workbench'
 
 export const DEFAULT_NAVIGATION_STATE: NavigationState = {
   navigator: 'sessions',
@@ -1021,6 +1033,7 @@ export const getNavigationStateKey = (state: NavigationState): string => {
     }
     return 'pages'
   }
+  if (state.navigator === 'workbench') return 'workbench'
   if (state.navigator === 'settings') {
     if (state.subpage === null) return 'settings'
     return `settings:${state.subpage}`
@@ -1039,6 +1052,8 @@ export const getNavigationStateKey = (state: NavigationState): string => {
 }
 
 export const parseNavigationStateKey = (key: string): NavigationState | null => {
+  if (key === 'workbench') return { navigator: 'workbench', details: null }
+
   // Handle sources
   if (key === 'sources') return { navigator: 'sources', details: null }
   if (key.startsWith('sources/source/')) {

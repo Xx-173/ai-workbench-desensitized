@@ -21,6 +21,11 @@
  *   CRAFT_WEBUI_PASSWORD       — optional shorter password for web login (falls back to CRAFT_SERVER_TOKEN)
  *   CRAFT_WEBUI_SECURE_COOKIE  — optional true/false override for the session cookie Secure flag
  *   CRAFT_WEBUI_WS_URL         — optional browser-facing ws:// or wss:// URL returned by /api/config
+ *   CRAFT_TEAM_MODE             — 'true' enables administrator-issued WebUI accounts and department usage
+ *   CRAFT_TEAM_ADMIN_USERNAME   — bootstrap administrator username (required only on first team-mode start)
+ *   CRAFT_TEAM_ADMIN_PASSWORD   — bootstrap administrator password (required only on first team-mode start)
+ *   AGENT_WORKBENCH_MASTER_KEY  — base64 32-byte key used to encrypt Agent credentials at rest in team mode
+ *   AGENT_WORKBENCH_ROOT        — persistent workbench state directory (default: ~/.craft-agent/agent-workbench)
  *   CRAFT_MESSAGING_WA_WORKER  — absolute path to worker.cjs (default: packages/messaging-whatsapp-worker/dist/worker.cjs)
  *   CRAFT_MESSAGING_NODE_BIN   — Node binary used to spawn the WhatsApp worker (default: node)
  */
@@ -31,7 +36,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { version as packageVersion } from '../package.json'
 import { enableDebug } from '@craft-agent/shared/utils/debug'
 import { bootstrapServer, startHealthHttpServer, generateServerToken } from '@craft-agent/server-core/bootstrap'
-import { validateSession, createWebuiHandler, nodeHttpAdapter } from '@craft-agent/server-core/webui'
+import { createWebuiHandler, nodeHttpAdapter } from '@craft-agent/server-core/webui'
 import type { WebuiHandler } from '@craft-agent/server-core/webui'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { getWorkspaces } from '@craft-agent/shared/config'
@@ -118,6 +123,38 @@ const webuiSecureCookies = parseOptionalBooleanEnv('CRAFT_WEBUI_SECURE_COOKIE', 
 const webuiWsUrl = parseOptionalWebSocketUrl('CRAFT_WEBUI_WS_URL', process.env.CRAFT_WEBUI_WS_URL)
 const serverToken = process.env.CRAFT_SERVER_TOKEN
 
+// Company/team mode is intentionally opt-in.  It replaces the historical
+// shared WebUI password with admin-provisioned accounts and mounts the
+// authenticated Agent Workbench APIs on the same Craft server.
+const teamMode = process.env.CRAFT_TEAM_MODE === 'true' || process.env.CRAFT_TEAM_MODE === '1'
+let teamWorkbench: { authProvider: any; httpApi: any } | null = null
+if (teamMode) {
+  const masterKey = process.env.AGENT_WORKBENCH_MASTER_KEY
+  const adminUsername = process.env.CRAFT_TEAM_ADMIN_USERNAME
+  const adminPassword = process.env.CRAFT_TEAM_ADMIN_PASSWORD
+  if (!serverToken) {
+    console.error('CRAFT_TEAM_MODE requires CRAFT_SERVER_TOKEN as the session-signing secret.')
+    process.exit(1)
+  }
+  if (!masterKey) {
+    console.error('CRAFT_TEAM_MODE requires AGENT_WORKBENCH_MASTER_KEY (base64 32-byte key).')
+    process.exit(1)
+  }
+  const { createTeamWorkbenchRuntime } = await import('../../../business/agent-workbench/adapter/team-workbench.ts')
+  teamWorkbench = await createTeamWorkbenchRuntime({
+    workspaceRootPath: process.env.AGENT_WORKBENCH_ROOT ?? join(homedir(), '.craft-agent', 'agent-workbench'),
+    masterKey,
+    sessionSecret: serverToken,
+    ...(adminUsername && adminPassword ? { bootstrapAdmin: {
+      username: adminUsername,
+      password: adminPassword,
+      ...(process.env.CRAFT_TEAM_ADMIN_NAME ? { displayName: process.env.CRAFT_TEAM_ADMIN_NAME } : {}),
+      ...(process.env.CRAFT_TEAM_DEFAULT_DEPARTMENT ? { departmentName: process.env.CRAFT_TEAM_DEFAULT_DEPARTMENT } : {}),
+    } } : {}),
+  })
+  console.log('[team] Administrator-issued accounts and department usage are enabled.')
+}
+
 // ---------------------------------------------------------------------------
 // Create WebUI handler early so it can be embedded in the WsRpcServer.
 // The handler is a pure function — it doesn't need the session manager yet
@@ -146,6 +183,7 @@ if (webuiEnabled && serverToken) {
     wsPort: rpcPort,
     getHealthCheck: () => healthCheckFn?.() ?? { status: 'starting' },
     logger: { info: console.log, warn: console.warn, error: console.error } as any,
+    ...(teamWorkbench ? { authProvider: teamWorkbench.authProvider, authenticatedApi: teamWorkbench.httpApi } : {}),
   })
 
   webuiNodeHandler = nodeHttpAdapter(webuiHandler.fetch)
@@ -170,12 +208,14 @@ const instance = await (async () => {
       serverVersion: process.env.CRAFT_VERSION ?? packageVersion,
       tls,
       // When web UI is enabled, accept JWT session cookies on WebSocket upgrade
-      validateSessionCookie: webuiEnabled && serverToken
-        ? async (cookieHeader) => {
-            const session = await validateSession(cookieHeader, serverToken)
-            return session !== null
-          }
+      validateSessionCookie: webuiHandler
+        ? async (cookieHeader) => (await webuiHandler!.validateSessionCookie(cookieHeader)) !== null
         : undefined,
+      // In team browser mode the server signing secret never acts as a user
+      // credential. Only the WebUI's account-backed session cookie can open a
+      // client connection, so merely knowing a legacy server token is not an
+      // alternate route around an administrator-disabled account.
+      ...(teamMode ? { validateToken: async () => false } : {}),
       // Embed the WebUI HTTP handler on the WS server's port
       httpHandler: webuiNodeHandler,
       applyPlatformToSubsystems: (platform) => {
@@ -312,7 +352,8 @@ const healthServer = await startHealthHttpServer({
 
 const serverProto = instance.protocol === 'wss' ? 'https' : 'http'
 console.log(`CRAFT_SERVER_URL=${instance.protocol}://${instance.host}:${instance.port}`)
-console.log(`CRAFT_SERVER_TOKEN=${instance.token}`)
+if (!teamMode) console.log(`CRAFT_SERVER_TOKEN=${instance.token}`)
+else console.log('CRAFT_SERVER_TOKEN=<withheld: team mode accepts account sessions only>')
 if (webuiHandler) {
   console.log(`CRAFT_WEBUI_URL=${serverProto}://0.0.0.0:${instance.port}`)
 }

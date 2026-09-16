@@ -32,10 +32,23 @@ of the upstream project and are NOT authored by Craft Docs Ltd.:
       explicit credential references; a local AES-GCM secret vault and
       Control Center; retry, rate-limit, quota and cost-estimate policies;
       privacy-preserving usage accounting; per-task artifact isolation;
-      deterministic chapter fallback; and account freeze / access revocation.
+      deterministic chapter fallback; result redaction/mapping; and account
+      freeze / access revocation. It also contains the team directory and
+      authenticated Agent Workbench API used by the optional team deployment.
+
+  apps/electron/src/renderer/
+  apps/webui/src/login.html
+  packages/server/src/index.ts
+  packages/server-core/src/webui/
+
+      Minimal integration changes made for this derivative: a native Craft
+      "AI 工作台" navigation route/page, account-login form fields, pluggable
+      WebUI authentication, authenticated extension API routing, and optional
+      team-mode server bootstrap. These changes are not authored by Craft Docs
+      Ltd. and do not claim ownership of Craft's underlying runtime.
 
       The repository README and root package description were updated to
       describe this derivative work accurately.
 
-The business directory adds one runtime dependency of its own. No source file
-under apps/ or packages/ was modified for the business-layer integration.
+The business directory adds one runtime dependency of its own. The above
+apps/packages files were modified only for the documented UI/auth/API bridge.

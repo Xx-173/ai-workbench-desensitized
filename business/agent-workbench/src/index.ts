@@ -20,6 +20,8 @@ export * from './usage-ledger.ts';
 export * from './execution-governor.ts';
 export * from './secret-vault.ts';
 export * from './control-plane.ts';
+export * from './result-mapper.ts';
+export * from './team-directory.ts';
 
 import { CapabilityRegistry } from './capability-registry.ts';
 import { capabilities } from './capabilities.ts';

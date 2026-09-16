@@ -19,6 +19,9 @@ export interface AgentUsageEvent {
   readonly inputTokens?: number;
   readonly outputTokens?: number;
   readonly attempts?: number;
+  /** Identity dimensions only; prompts, outputs, endpoints and secrets are never recorded. */
+  readonly userId?: string;
+  readonly departmentId?: string;
 }
 
 export interface UsageRecorder {

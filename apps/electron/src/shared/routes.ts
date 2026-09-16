@@ -198,6 +198,9 @@ export const routes = {
 
     /** Kanban board view (sessions navigator, board view mode, all sessions) */
     board: () => 'board' as const,
+
+    /** Company Agent Workbench (full-width native Craft panel). */
+    workbench: () => 'workbench' as const,
   },
 } as const
 

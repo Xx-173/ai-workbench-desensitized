@@ -53,6 +53,11 @@ export interface ToolContext {
   readonly credentials: CredentialReader;
   /** Structured progress sink (see business-events.ts). */
   readonly progress?: (event: unknown) => void;
+  /** Optional identity supplied by an authenticated web/control-plane caller. */
+  readonly actor?: {
+    readonly userId: string;
+    readonly departmentId?: string;
+  };
 }
 
 export interface CredentialReader {

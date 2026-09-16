@@ -119,6 +119,7 @@ import {
   isAutomationsNavigation,
   isProjectsNavigation,
   isPagesNavigation,
+  isWorkbenchNavigation,
   type NavigationState,
 } from "@/contexts/NavigationContext"
 import type { SettingsSubpage } from "../../../shared/types"
@@ -637,6 +638,7 @@ function AppShellContent({
   // Pages behaves the same way: both the library grid and an open page render
   // full-width in the content area — there is no pages navigator list.
   const isPagesView = isPagesNavigation(navState)
+  const isWorkbenchView = isWorkbenchNavigation(navState)
 
   // Derive source filter from navigation state (only when in sources navigator)
   const sourceFilter: SourceFilter | null = isSourcesNavigation(navState) ? navState.filter ?? null : null
@@ -1841,6 +1843,10 @@ function AppShellContent({
     navigate(routes.view.pages())
   }, [])
 
+  const handleWorkbenchClick = useCallback(() => {
+    navigate(routes.view.workbench())
+  }, [])
+
   const handleAutomationsScheduledClick = useCallback(() => {
     navigate(routes.view.automationsScheduled())
   }, [])
@@ -2267,6 +2273,8 @@ function AppShellContent({
       return t("sidebar.allPages")
     }
 
+    if (isWorkbenchNavigation(navState)) return 'AI 工作台'
+
     // Automations navigator
     if (isAutomationsNavigation(navState)) {
       if (!automationFilter) return t("sidebar.allAutomations")
@@ -2649,6 +2657,13 @@ function AppShellContent({
                         variant: (isPagesNavigation(navState) && navState.details?.pageSlug === p.config.slug) ? "default" as const : "ghost" as const,
                         onClick: () => navigate(routes.view.pages(p.config.slug)),
                       })),
+                    },
+                    {
+                      id: "nav:workbench",
+                      title: "AI 工作台",
+                      icon: Bot,
+                      variant: isWorkbenchNavigation(navState) ? "default" : "ghost",
+                      onClick: handleWorkbenchClick,
                     },
                     {
                       id: "nav:automations",
@@ -3622,7 +3637,7 @@ function AppShellContent({
             )}
             </div>
           }
-          navigatorWidth={isAutoCompact ? sessionListWidth : (effectiveSidebarAndNavigatorHidden || isBoardView || isPagesView ? 0 : sessionListWidth)}
+          navigatorWidth={isAutoCompact ? sessionListWidth : (effectiveSidebarAndNavigatorHidden || isBoardView || isPagesView || isWorkbenchView ? 0 : sessionListWidth)}
           isSidebarAndNavigatorHidden={effectiveSidebarAndNavigatorHidden}
           isRightSidebarVisible={false}
           isCompact={isAutoCompact}
@@ -3663,7 +3678,7 @@ function AppShellContent({
         )}
 
         {/* Session List Resize Handle (absolute, hidden in focused mode, board view, and pages) */}
-        {!effectiveSidebarAndNavigatorHidden && !isBoardView && !isPagesView && (
+        {!effectiveSidebarAndNavigatorHidden && !isBoardView && !isPagesView && !isWorkbenchView && (
         <div
           ref={sessionListHandleRef}
           onMouseDown={(e) => { e.preventDefault(); setIsResizing('session-list') }}
