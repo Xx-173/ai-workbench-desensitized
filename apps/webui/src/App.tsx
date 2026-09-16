@@ -41,6 +41,10 @@ export default function App() {
       }
       const { wsUrl } = await configRes.json() as { wsUrl: string }
       if (!wsUrl) throw new Error('Server did not return a WebSocket URL')
+      // This authenticated endpoint exists only in organization mode. The
+      // shared Craft renderer uses the marker to skip personal-provider setup.
+      const teamRes = await fetch('/api/workbench/bootstrap', { credentials: 'same-origin' })
+      if (teamRes.ok) (window as any).__CRAFT_TEAM_MODE__ = true
       const params = new URLSearchParams(window.location.search)
       let workspaceId = params.get('workspace') ?? undefined
       if (!workspaceId) {

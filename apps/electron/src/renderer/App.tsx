@@ -35,6 +35,7 @@ import { formatSessionLoadFailure, shouldTreatSessionLoadFailureAsTransportFallb
 import { extractWorkspaceSlugFromPath } from '@craft-agent/shared/utils/workspace-slug'
 import { DEFAULT_THINKING_LEVEL } from '@craft-agent/shared/agent/thinking-levels'
 import { initRendererPerf } from './lib/perf'
+import { isWebUI } from './lib/platform'
 import {
   initializeSessionsAtom,
   addSessionAtom,
@@ -278,6 +279,9 @@ function SessionLoadErrorScreen({
 
 export default function App() {
   const { t } = useTranslation()
+  // Organization browser deployments own keys/models on the server. The flag
+  // is set after the authenticated workbench bootstrap in apps/webui.
+  const isOrganizationBrowser = isWebUI && (window as any).__CRAFT_TEAM_MODE__ === true
 
   // Initialize renderer perf tracking early (debug mode = running from source)
   // Uses useEffect with empty deps to run once on mount before any session switches
@@ -717,7 +721,7 @@ export default function App() {
         const needs = await window.electronAPI.getSetupNeeds()
         setSetupNeeds(needs)
 
-        if (needs.isFullyConfigured) {
+        if (needs.isFullyConfigured || isOrganizationBrowser) {
           // If no workspace is selected (thin client without CRAFT_WORKSPACE_ID),
           // show workspace picker before entering the main app
           if (!wsId) {
@@ -737,7 +741,7 @@ export default function App() {
     }
 
     initialize()
-  }, [])
+  }, [isOrganizationBrowser])
 
   // Session selection state
   const [sessionSelection, setSession] = useSession()
