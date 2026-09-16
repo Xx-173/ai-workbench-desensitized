@@ -145,6 +145,8 @@ export interface WebuiAuthProvider {
 /** Optional authenticated extension surface for a business module. */
 export interface WebuiAuthenticatedApi {
   fetch: (request: Request, identity: WebuiIdentity) => Promise<Response | null>
+  /** Optional organization-specific workspace resolution for browser handshakes. */
+  getDefaultWorkspaceId?: (identity: WebuiIdentity) => Promise<string | null>
 }
 
 export interface WebuiHandlerOptions {
@@ -417,6 +419,10 @@ export function createWebuiHandler(options: WebuiHandlerOptions): WebuiHandler {
       const configSession = await sessionIdentity(req.headers.get('cookie'))
       if (!configSession) {
         return Response.json({ error: 'Unauthorized' }, { status: 401 })
+      }
+      const organizationWorkspaceId = await authenticatedApi?.getDefaultWorkspaceId?.(configSession)
+      if (organizationWorkspaceId) {
+        return Response.json({ defaultWorkspaceId: organizationWorkspaceId })
       }
       const { getActiveWorkspace } = await import('@craft-agent/shared/config/storage')
       const active = getActiveWorkspace()

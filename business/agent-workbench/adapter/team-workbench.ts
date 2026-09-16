@@ -71,6 +71,13 @@ export interface TeamAuthProvider {
 
 export interface WorkbenchHttpApi {
   fetch(request: Request, identity: TeamIdentity): Promise<Response | null>;
+  /** Resolve the only Craft workspace a normal team member may use. */
+  getDefaultWorkspaceId(identity: TeamIdentity): Promise<string | null>;
+}
+
+export interface TeamWorkspaceControl {
+  setWorkspaceResolver(resolver: (identity: TeamIdentity) => Promise<string>): void;
+  canAccessWorkspace(identity: TeamIdentity, workspaceId: string | null | undefined): Promise<boolean>;
 }
 
 function base64url(value: string | Buffer): string {
@@ -195,13 +202,14 @@ function eventTotals(events: readonly AgentUsageEvent[]) {
   return totals;
 }
 
-class TeamWorkbenchApi implements WorkbenchHttpApi {
+class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
   private readonly directory: TeamDirectory;
   private readonly plane: AgentControlPlane;
   private readonly vault: EncryptedFileSecretVault;
   private readonly usage: JsonlUsageLedger;
   private readonly caseMemory: JsonlCaseMemory;
   private readonly workspaceRootPath: string;
+  private workspaceResolver: ((identity: TeamIdentity) => Promise<string>) | null = null;
 
   constructor(
     directory: TeamDirectory,
@@ -217,6 +225,20 @@ class TeamWorkbenchApi implements WorkbenchHttpApi {
     this.usage = usage;
     this.caseMemory = caseMemory;
     this.workspaceRootPath = workspaceRootPath;
+  }
+
+  setWorkspaceResolver(resolver: (identity: TeamIdentity) => Promise<string>): void {
+    this.workspaceResolver = resolver;
+  }
+
+  async getDefaultWorkspaceId(identity: TeamIdentity): Promise<string | null> {
+    return this.workspaceResolver ? this.workspaceResolver(identity) : null;
+  }
+
+  async canAccessWorkspace(identity: TeamIdentity, workspaceId: string | null | undefined): Promise<boolean> {
+    if (identity.role === 'admin') return true;
+    if (!workspaceId || !this.workspaceResolver) return false;
+    return workspaceId === await this.workspaceResolver(identity);
   }
 
   async fetch(request: Request, identity: TeamIdentity): Promise<Response | null> {
@@ -262,6 +284,7 @@ class TeamWorkbenchApi implements WorkbenchHttpApi {
     })));
     return {
       identity,
+      workspaceId: await this.getDefaultWorkspaceId(identity),
       agents,
       ownUsage: await this.usageFor(identity.userId),
       ...(identity.role === 'admin' ? {
@@ -349,7 +372,11 @@ class TeamWorkbenchApi implements WorkbenchHttpApi {
   }
 }
 
-export async function createTeamWorkbenchRuntime(options: TeamWorkbenchOptions): Promise<{ authProvider: TeamAuthProvider; httpApi: WorkbenchHttpApi }> {
+export async function createTeamWorkbenchRuntime(options: TeamWorkbenchOptions): Promise<{
+  authProvider: TeamAuthProvider;
+  httpApi: WorkbenchHttpApi;
+  workspaceControl: TeamWorkspaceControl;
+}> {
   const controlDir = join(options.workspaceRootPath, '.agent-workbench');
   const bootstrap = options.bootstrapAdmin;
   const directory = await TeamDirectory.open(options.teamStorePath ?? join(controlDir, 'team.json'), bootstrap ? {
@@ -366,8 +393,10 @@ export async function createTeamWorkbenchRuntime(options: TeamWorkbenchOptions):
     vault,
     usage,
   );
+  const httpApi = new TeamWorkbenchApi(directory, plane, vault, usage, caseMemory, options.workspaceRootPath);
   return {
     authProvider: new DirectoryAuthProvider(directory, options.sessionSecret),
-    httpApi: new TeamWorkbenchApi(directory, plane, vault, usage, caseMemory, options.workspaceRootPath),
+    httpApi,
+    workspaceControl: httpApi,
   };
 }

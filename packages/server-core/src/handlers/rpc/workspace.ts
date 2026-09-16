@@ -4,7 +4,7 @@ import { homedir } from 'os'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import { getWorkspaceByNameOrId, addWorkspace, setActiveWorkspace, updateWorkspaceRemoteServer } from '@craft-agent/shared/config'
 import { perf } from '@craft-agent/shared/utils'
-import { pushTyped, type RpcServer } from '@craft-agent/server-core/transport'
+import { pushTyped, type RequestContext, type RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
 import { isValidWorkspaceRootPath } from '../../utils/path-validation'
 
@@ -34,17 +34,29 @@ export const CORE_HANDLED_CHANNELS = [
   RPC_CHANNELS.logo.GET_URL,
 ] as const
 
+function isOrganizationMember(ctx: RequestContext): boolean {
+  return (ctx.sessionContext as { role?: unknown } | undefined)?.role === 'member'
+}
+
 export function registerWorkspaceCoreHandlers(server: RpcServer, deps: HandlerDeps): void {
   const { sessionManager } = deps
   const windowManager = deps.windowManager
 
   // Get workspaces (LOCAL_ONLY — includes rootPath for local Electron renderer)
-  server.handle(RPC_CHANNELS.workspaces.GET, async () => {
-    return sessionManager.getWorkspaces()
+  server.handle(RPC_CHANNELS.workspaces.GET, async (requestContext) => {
+    const workspaces = sessionManager.getWorkspaces()
+    return isOrganizationMember(requestContext)
+      ? (requestContext.workspaceId
+        ? workspaces.filter((workspace) => workspace.id === requestContext.workspaceId)
+        : [])
+      : workspaces
   })
 
   // Create a new workspace at a folder path (Obsidian-style: folder IS the workspace)
-  server.handle(RPC_CHANNELS.workspaces.CREATE, async (_ctx, folderPath: string, name: string, remoteServer?: { url: string; token: string; remoteWorkspaceId: string }) => {
+  server.handle(RPC_CHANNELS.workspaces.CREATE, async (requestContext, folderPath: string, name: string, remoteServer?: { url: string; token: string; remoteWorkspaceId: string }) => {
+    if (isOrganizationMember(requestContext)) {
+      throw new Error('Organization members cannot create workspaces')
+    }
     const rootPath = folderPath.trim()
     const validation = isValidWorkspaceRootPath(rootPath)
     if (!validation.valid) {
@@ -93,6 +105,9 @@ export function registerWorkspaceCoreHandlers(server: RpcServer, deps: HandlerDe
 
   // Switch workspace in current window (in-window switching)
   server.handle(RPC_CHANNELS.window.SWITCH_WORKSPACE, async (ctx, workspaceId: string) => {
+    if (isOrganizationMember(ctx)) {
+      throw new Error('Organization members cannot switch workspaces')
+    }
     const end = perf.start('ipc.switchWorkspace', { workspaceId })
 
     // Keep WS push routing in sync (works for both GUI and headless)

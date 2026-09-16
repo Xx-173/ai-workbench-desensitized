@@ -39,7 +39,7 @@ import { bootstrapServer, startHealthHttpServer, generateServerToken } from '@cr
 import { createWebuiHandler, nodeHttpAdapter } from '@craft-agent/server-core/webui'
 import type { WebuiHandler } from '@craft-agent/server-core/webui'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
-import { getWorkspaces } from '@craft-agent/shared/config'
+import { addWorkspace, getWorkspaces } from '@craft-agent/shared/config'
 import { createMessagingBootstrap, type MessagingBootstrapHandle } from '@craft-agent/messaging-gateway'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 
@@ -127,7 +127,7 @@ const serverToken = process.env.CRAFT_SERVER_TOKEN
 // shared WebUI password with admin-provisioned accounts and mounts the
 // authenticated Agent Workbench APIs on the same Craft server.
 const teamMode = process.env.CRAFT_TEAM_MODE === 'true' || process.env.CRAFT_TEAM_MODE === '1'
-let teamWorkbench: { authProvider: any; httpApi: any } | null = null
+let teamWorkbench: { authProvider: any; httpApi: any; workspaceControl: any } | null = null
 if (teamMode) {
   const masterKey = process.env.AGENT_WORKBENCH_MASTER_KEY
   const adminUsername = process.env.CRAFT_TEAM_ADMIN_USERNAME
@@ -141,8 +141,9 @@ if (teamMode) {
     process.exit(1)
   }
   const { createTeamWorkbenchRuntime } = await import('../../../business/agent-workbench/adapter/team-workbench.ts')
+  const teamWorkspaceRoot = process.env.AGENT_WORKBENCH_ROOT ?? join(homedir(), '.craft-agent', 'agent-workbench')
   teamWorkbench = await createTeamWorkbenchRuntime({
-    workspaceRootPath: process.env.AGENT_WORKBENCH_ROOT ?? join(homedir(), '.craft-agent', 'agent-workbench'),
+    workspaceRootPath: teamWorkspaceRoot,
     masterKey,
     sessionSecret: serverToken,
     ...(adminUsername && adminPassword ? { bootstrapAdmin: {
@@ -151,6 +152,18 @@ if (teamMode) {
       ...(process.env.CRAFT_TEAM_ADMIN_NAME ? { displayName: process.env.CRAFT_TEAM_ADMIN_NAME } : {}),
       ...(process.env.CRAFT_TEAM_DEFAULT_DEPARTMENT ? { departmentName: process.env.CRAFT_TEAM_DEFAULT_DEPARTMENT } : {}),
     } } : {}),
+  })
+  // Craft's default picker is a personal-device concept. In company mode,
+  // each account receives one server-owned workspace on first login. The
+  // immutable directory/user IDs make the on-disk path deterministic and do
+  // not expose user-provided names to filesystem paths.
+  teamWorkbench.workspaceControl.setWorkspaceResolver(async (identity: {
+    userId: string; departmentId: string; displayName: string;
+  }) => {
+    const rootPath = join(teamWorkspaceRoot, 'craft-workspaces', identity.departmentId, identity.userId)
+    const existing = getWorkspaces().find((workspace) => workspace.rootPath === rootPath)
+    if (existing) return existing.id
+    return addWorkspace({ name: `智能工作台 · ${identity.displayName}`, rootPath }).id
   })
   console.log('[team] Administrator-issued accounts and department usage are enabled.')
 }
@@ -174,6 +187,14 @@ const organizationModelAdminChannels = new Set<string>([
   RPC_CHANNELS.copilot.CANCEL_OAUTH,
   RPC_CHANNELS.copilot.LOGOUT,
   RPC_CHANNELS.sessions.SET_MODEL,
+])
+
+/** Workspace-mutating routes are admin-only in the browser company deployment. */
+const organizationWorkspaceAdminChannels = new Set<string>([
+  RPC_CHANNELS.server.CREATE_WORKSPACE,
+  RPC_CHANNELS.workspaces.CREATE,
+  RPC_CHANNELS.workspaces.UPDATE_REMOTE,
+  RPC_CHANNELS.window.SWITCH_WORKSPACE,
 ])
 
 // ---------------------------------------------------------------------------
@@ -236,9 +257,19 @@ const instance = await (async () => {
       // browser cannot elevate it by changing a request field or route.
       ...(teamWorkbench ? {
         resolveSessionContext: async (cookieHeader: string | null) => teamWorkbench!.authProvider.validateSession(cookieHeader),
-        authorizeRequest: (identity: unknown, channel: string) => {
-          if (!organizationModelAdminChannels.has(channel)) return true
-          return (identity as { role?: string } | undefined)?.role === 'admin'
+        authorizeRequest: async (identity: unknown, channel: string, requestContext) => {
+          const teamIdentity = identity as { role?: string } | undefined
+          if (teamIdentity?.role !== 'admin') {
+            if (organizationModelAdminChannels.has(channel) || organizationWorkspaceAdminChannels.has(channel)) {
+              return false
+            }
+            // The client-supplied handshake workspace must equal the one
+            // provisioned for this account before any scoped RPC may run.
+            if (requestContext.workspaceId && !await teamWorkbench!.workspaceControl.canAccessWorkspace(teamIdentity as any, requestContext.workspaceId)) {
+              return false
+            }
+          }
+          return true
         },
       } : {}),
       // In team browser mode the server signing secret never acts as a user

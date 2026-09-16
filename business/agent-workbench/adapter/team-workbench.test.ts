@@ -19,6 +19,9 @@ test('team workbench authorizes only provisioned users and exposes department-sa
     assert.equal(await runtime.authProvider.authenticate({ username: 'nobody', password: 'very-strong-password' }, { ip: 'test' }), null);
     const signedIn = await runtime.authProvider.authenticate({ username: 'admin', password: 'very-strong-password' }, { ip: 'test' });
     assert.ok(signedIn);
+    runtime.workspaceControl.setWorkspaceResolver(async (identity) => `workspace-${identity.userId}`);
+    assert.equal(await runtime.httpApi.getDefaultWorkspaceId(signedIn.identity), `workspace-${signedIn.identity.userId}`);
+    assert.equal(await runtime.workspaceControl.canAccessWorkspace(signedIn.identity, 'any-admin-workspace'), true);
     const cookie = runtime.authProvider.buildSessionCookie(signedIn.token, false).split(';')[0]!;
     assert.equal((await runtime.authProvider.validateSession(cookie))?.username, 'admin');
 
@@ -61,6 +64,9 @@ test('department-scoped Agents are hidden and denied by the server for other mem
     assert.equal(configResponse?.status, 200);
     const member = await runtime.authProvider.authenticate({ username: 'member', password: 'very-strong-password' }, { ip: 'test' });
     assert.ok(member);
+    runtime.workspaceControl.setWorkspaceResolver(async (identity) => `workspace-${identity.userId}`);
+    assert.equal(await runtime.workspaceControl.canAccessWorkspace(member.identity, `workspace-${member.identity.userId}`), true);
+    assert.equal(await runtime.workspaceControl.canAccessWorkspace(member.identity, 'another-workspace'), false);
     const bootstrap = await runtime.httpApi.fetch(new Request('http://local/api/workbench/bootstrap'), member.identity);
     const payload = await bootstrap?.json() as { agents: Array<{ id: string }> };
     assert.deepEqual(payload.agents.map((agent) => agent.id), ['marketing-copy']);

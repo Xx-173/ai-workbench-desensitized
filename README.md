@@ -105,6 +105,8 @@ bun run server:prod
 
 `AGENT_WORKBENCH_ROOT` 下会保留加密 Key 库、Manifest、团队目录、无原文用量 JSONL 和无原文 Case Memory JSONL；单实例演示默认用受限权限 JSON 文件持久化。成员只能看到自己的调用与按 Agent 聚合；管理员可查看部门、人员和 Agent 聚合。Token 仅在下游服务返回 usage 时入账，不会用估算值伪造。生产多实例需要把团队目录/用量账本替换为 PostgreSQL 等共享存储，并在反向代理层强制 HTTPS/WSS。
 
+团队模式不会向员工展示 Craft 的“创建或选择 Workspace”流程。员工首次登录时，服务端会按其不可变的部门 ID 与成员 ID 自动分配一个独立 Workspace；普通成员只能列出、使用该 Workspace，不能新建、切换或配置远程 Workspace。部门仍是 Agent 授权和用量汇总维度，而不是多人共用的文件目录，因此成员的会话与文件保持隔离。管理员保留工作台控制台、组织模型配置、Agent 配置和跨部门用量分析权限。
+
 ### 真实外部 Agent 沙箱验收
 
 仓库提供 Dify/Coze 的协议适配与完整的本地配置检查，但不会把未拿到部署方凭据的服务写成“已连通”。当你有最小权限 Dify 沙箱 Key 时，可按 [`business/agent-workbench/docs/external-agent-sandbox.md`](business/agent-workbench/docs/external-agent-sandbox.md) 运行一次真实工作流调用；脚本只落地耗时、输入指纹、返回大小和结果字段名等脱敏验收制品，不会提交凭据或业务内容。

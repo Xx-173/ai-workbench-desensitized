@@ -5,7 +5,7 @@ import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import { addWorkspace, setActiveWorkspace } from '@craft-agent/shared/config'
 import { getDefaultWorkspacesDir, ensureDefaultWorkspacesDir } from '@craft-agent/shared/workspaces'
 import type { ServerStatus, ServerHealth } from '@craft-agent/core/types'
-import type { RpcServer } from '@craft-agent/server-core/transport'
+import type { RequestContext, RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
 import type { ServerHandlerContext } from '../../bootstrap/headless-start'
 
@@ -18,6 +18,10 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.server.HOME_DIR,
 ] as const
 
+function isOrganizationMember(ctx: RequestContext): boolean {
+  return (ctx.sessionContext as { role?: unknown } | undefined)?.role === 'member'
+}
+
 export function registerServerHandlers(
   server: RpcServer,
   deps: HandlerDeps,
@@ -29,13 +33,21 @@ export function registerServerHandlers(
   // Workspace discovery (moved from workspace.ts — server-level, no workspace context)
   // -----------------------------------------------------------------------
 
-  server.handle(RPC_CHANNELS.server.GET_WORKSPACES, async () => {
-    const workspaces = sessionManager.getWorkspacesInfo()
+  server.handle(RPC_CHANNELS.server.GET_WORKSPACES, async (requestContext) => {
+    const allWorkspaces = sessionManager.getWorkspacesInfo()
+    const workspaces = isOrganizationMember(requestContext)
+      ? (requestContext.workspaceId
+        ? allWorkspaces.filter((workspace) => workspace.id === requestContext.workspaceId)
+        : [])
+      : allWorkspaces
     deps.platform.logger.info(`[server:getWorkspaces] returning ${workspaces.length} workspaces: ${JSON.stringify(workspaces.map(w => ({ id: w.id, name: w.name })))}`)
     return workspaces
   })
 
-  server.handle(RPC_CHANNELS.server.CREATE_WORKSPACE, async (_ctx, name: string) => {
+  server.handle(RPC_CHANNELS.server.CREATE_WORKSPACE, async (requestContext, name: string) => {
+    if (isOrganizationMember(requestContext)) {
+      throw new Error('Organization members cannot create workspaces')
+    }
     if (!name?.trim()) throw new Error('Workspace name is required')
     const trimmed = name.trim()
 
