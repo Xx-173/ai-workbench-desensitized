@@ -83,6 +83,8 @@ export interface LinkItem {
   sortable?: SortableConfig
   // Optional element rendered after the title (e.g., label type icon), revealed on hover
   afterTitle?: React.ReactNode
+  /** Browser company mode may keep a route available to administrators while hiding it from members. */
+  hidden?: boolean
 }
 
 export interface SeparatorItem {
@@ -168,6 +170,7 @@ const itemVariants: Variants = {
  * - Two-phase drop animation: overlay fades out, ghost fades in
  */
 export function LeftSidebar({ links, isCollapsed, getItemProps, focusedItemId, isNested }: LeftSidebarProps) {
+  const visibleLinks = links.filter((item) => isSeparatorItem(item) || !item.hidden)
   // For nested sidebars, wrap in motion container for stagger effect
   const NavWrapper = isNested ? motion.nav : 'nav'
   const navProps = isNested ? {
@@ -195,7 +198,7 @@ export function LeftSidebar({ links, isCollapsed, getItemProps, focusedItemId, i
             aria-hidden="true"
           />
         )}
-        {links.map((item) => {
+        {visibleLinks.map((item) => {
           // Handle separator items
           if (isSeparatorItem(item)) {
             return (

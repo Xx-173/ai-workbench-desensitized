@@ -107,6 +107,8 @@ bun run server:prod
 
 团队模式不会向员工展示 Craft 的“创建或选择 Workspace”流程。员工首次登录时，服务端会按其不可变的部门 ID 与成员 ID 自动分配一个独立 Workspace；普通成员只能列出、使用该 Workspace，不能新建、切换或配置远程 Workspace。部门仍是 Agent 授权和用量汇总维度，而不是多人共用的文件目录，因此成员的会话与文件保持隔离。管理员保留工作台控制台、组织模型配置、Agent 配置和跨部门用量分析权限。
 
+员工 WebUI 的工作入口按“任务流”收敛：`我的任务` 中保留积压、待办、待审查、完成等状态；员工可以使用项目、定时任务、事件触发和已发布 Agent。数据源、MCP、技能、原始标签、模型切换与设置入口不对成员显示。对话使用组织默认模型；Agent 按 Manifest 自动生成业务输入表单，不要求员工填写 JSON 或接触 Key。管理员仍可在 Agent 中心和设置中配置组织能力。
+
 ### 真实外部 Agent 沙箱验收
 
 仓库提供 Dify/Coze 的协议适配与完整的本地配置检查，但不会把未拿到部署方凭据的服务写成“已连通”。当你有最小权限 Dify 沙箱 Key 时，可按 [`business/agent-workbench/docs/external-agent-sandbox.md`](business/agent-workbench/docs/external-agent-sandbox.md) 运行一次真实工作流调用；脚本只落地耗时、输入指纹、返回大小和结果字段名等脱敏验收制品，不会提交凭据或业务内容。

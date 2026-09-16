@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Bot, Building2, KeyRound, Play, RefreshCw, ShieldCheck, Users } from 'lucide-react'
 
 type Identity = { userId: string; username: string; displayName: string; departmentId: string; role: 'admin' | 'member' }
-type Agent = { id: string; toolName: string; description: string; kind: string; inputSchema: { properties: Record<string, { type: string; description: string }>; required?: string[] }; health: { status: string; missingReferences: string[] } }
+type AgentField = { type: string; description: string; enum?: string[] }
+type Agent = { id: string; toolName: string; description: string; kind: string; inputSchema: { properties: Record<string, AgentField>; required?: string[] }; health: { status: string; missingReferences: string[] } }
 type Department = { id: string; name: string }
 type User = { id: string; username: string; displayName: string; departmentId: string; role: string; status: 'active' | 'disabled' }
 type Usage = { calls: number; successes: number; failures: number; durationMs: number; inputTokens: number; outputTokens: number }
@@ -31,9 +32,38 @@ function usageCards(usage: Usage): ReadonlyArray<readonly [string, string | numb
   ]
 }
 
-function schemaExample(agent: Agent | undefined): string {
-  if (!agent) return '{}'
-  return JSON.stringify(Object.fromEntries(Object.entries(agent.inputSchema.properties).map(([key, value]) => [key, value.type === 'number' ? 0 : value.type === 'boolean' ? false : value.type === 'array' ? [] : ''])), null, 2)
+function initialFormValues(agent: Agent | undefined): Record<string, string> {
+  if (!agent) return {}
+  return Object.fromEntries(Object.entries(agent.inputSchema.properties).map(([key, value]) => [key, value.type === 'boolean' ? 'false' : '']))
+}
+
+function toAgentInput(agent: Agent, values: Record<string, string>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(agent.inputSchema.properties).map(([key, field]) => {
+    const value = values[key] ?? ''
+    if (field.type === 'number' || field.type === 'integer') return [key, Number(value)]
+    if (field.type === 'boolean') return [key, value === 'true']
+    if (field.type === 'array' || field.type === 'object') {
+      try { return [key, JSON.parse(value || (field.type === 'array' ? '[]' : '{}'))] }
+      catch { throw new Error(`${field.description || key} 需要填写有效 JSON`) }
+    }
+    return [key, value]
+  }))
+}
+
+function fieldLabel(name: string, field: AgentField): string {
+  return field.description || name.replace(/([A-Z])/g, ' $1').replace(/^./, (letter) => letter.toUpperCase())
+}
+
+function agentName(agent: Agent): string {
+  const names: Record<string, string> = {
+    'video-analysis': '视频解析',
+    'fish-voice': '音色生成',
+    'script-cleaner': '话术清洗',
+    'copywriter-dify': '文案生成',
+    'script-qc-coze': '话术质检',
+    'external-mcp-agent': '外部 Agent 调用',
+  }
+  return names[agent.id] ?? agent.id.replace(/[-_]/g, ' ')
 }
 
 function UsageRows({ rows, empty }: { rows: UsageRow[] | undefined; empty: string }) {
@@ -45,7 +75,7 @@ export default function AgentWorkbenchPage() {
   const [data, setData] = useState<Bootstrap | null>(null)
   const [tab, setTab] = useState<Tab>('run')
   const [selectedAgentId, setSelectedAgentId] = useState('')
-  const [input, setInput] = useState('{}')
+  const [formValues, setFormValues] = useState<Record<string, string>>({})
   const [result, setResult] = useState<unknown>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -69,14 +99,19 @@ export default function AgentWorkbenchPage() {
   }
 
   useEffect(() => { void load() }, [])
-  useEffect(() => { if (selectedAgent) setInput(schemaExample(selectedAgent)) }, [selectedAgentId])
+  useEffect(() => { setFormValues(initialFormValues(selectedAgent)) }, [selectedAgentId])
 
   const runAgent = async () => {
     if (!selectedAgentId) return
+    if (!selectedAgent) return
+    const missingRequired = (selectedAgent.inputSchema.required ?? []).find((name) => !formValues[name]?.trim())
+    if (missingRequired) {
+      setError(`请填写：${fieldLabel(missingRequired, selectedAgent.inputSchema.properties[missingRequired] ?? { type: 'string', description: missingRequired })}`)
+      return
+    }
     setBusy(true); setError(''); setResult(null)
     try {
-      const parsed = JSON.parse(input) as object
-      setResult(await api('/api/workbench/invoke', { method: 'POST', body: JSON.stringify({ agentId: selectedAgentId, input: parsed }) }))
+      setResult(await api('/api/workbench/invoke', { method: 'POST', body: JSON.stringify({ agentId: selectedAgentId, input: toAgentInput(selectedAgent, formValues) }) }))
       await load()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
@@ -141,8 +176,8 @@ export default function AgentWorkbenchPage() {
       {error && <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
 
       {tab === 'run' && <section className="grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
-        <aside className="space-y-2">{data.agents.length === 0 ? <p className="rounded-lg border p-4 text-sm text-muted-foreground">管理员尚未配置可用 Agent。</p> : data.agents.map((agent) => <button key={agent.id} onClick={() => setSelectedAgentId(agent.id)} className={`w-full rounded-lg border p-3 text-left ${selectedAgentId === agent.id ? 'border-foreground bg-muted/60' : 'hover:bg-muted/40'}`}><div className="flex justify-between gap-2"><strong className="text-sm">{agent.id}</strong><span className="text-xs text-muted-foreground">{agent.kind}</span></div><p className="mt-1 text-xs text-muted-foreground">{agent.description}</p><p className={`mt-2 text-xs ${agent.health.status === 'configured' ? 'text-emerald-600' : 'text-amber-600'}`}>{agent.health.status === 'configured' ? '已配置' : `缺少 ${agent.health.missingReferences.join(', ')}`}</p></button>)}</aside>
-        <div className="space-y-4"><section className="rounded-xl border bg-card p-4"><h2 className="font-medium">{selectedAgent?.description ?? '选择一个 Agent'}</h2><p className="mt-1 text-xs text-muted-foreground">工具名：{selectedAgent?.toolName ?? '-'}</p><label className="mt-4 block text-sm font-medium">输入 JSON</label><textarea value={input} onChange={(event) => setInput(event.target.value)} spellCheck={false} className="mt-2 min-h-52 w-full rounded-md border bg-background p-3 font-mono text-xs outline-none focus:ring-2 focus:ring-ring" /><button disabled={!selectedAgent || busy || selectedAgent.health.status !== 'configured'} onClick={() => void runAgent()} className="mt-3 inline-flex items-center gap-2 rounded-md bg-foreground px-3 py-2 text-sm font-medium text-background disabled:opacity-50"><Play className="h-4 w-4" />{busy ? '执行中…' : '运行并记录用量'}</button></section>
+        <aside className="space-y-2">{data.agents.length === 0 ? <p className="rounded-lg border p-4 text-sm text-muted-foreground">管理员尚未配置可用 Agent。</p> : data.agents.map((agent) => <button key={agent.id} onClick={() => setSelectedAgentId(agent.id)} className={`w-full rounded-lg border p-3 text-left ${selectedAgentId === agent.id ? 'border-foreground bg-muted/60' : 'hover:bg-muted/40'}`}><div className="flex justify-between gap-2"><strong className="text-sm">{agentName(agent)}</strong><span className="text-xs text-muted-foreground">{agent.kind}</span></div><p className="mt-1 text-xs text-muted-foreground">{agent.description}</p><p className={`mt-2 text-xs ${agent.health.status === 'configured' ? 'text-emerald-600' : 'text-amber-600'}`}>{agent.health.status === 'configured' ? '可运行' : `等待管理员配置：${agent.health.missingReferences.join('、')}`}</p></button>)}</aside>
+        <div className="space-y-4"><section className="rounded-xl border bg-card p-4"><h2 className="font-medium">{selectedAgent?.description ?? '选择一个 Agent'}</h2><p className="mt-1 text-xs text-muted-foreground">已发布的业务 Agent 会使用管理员配置的服务和密钥；成员只需提交业务输入。</p><div className="mt-4 grid gap-3 sm:grid-cols-2">{Object.entries(selectedAgent?.inputSchema.properties ?? {}).map(([name, field]) => <label key={name} className="block text-sm font-medium"><span>{fieldLabel(name, field)}{selectedAgent?.inputSchema.required?.includes(name) ? <span className="ml-1 text-destructive">*</span> : null}</span>{field.type === 'boolean' ? <select value={formValues[name] ?? 'false'} onChange={(event) => setFormValues((current) => ({ ...current, [name]: event.target.value }))} className="mt-1.5 w-full rounded-md border bg-background px-3 py-2 text-sm"><option value="false">否</option><option value="true">是</option></select> : field.enum?.length ? <select value={formValues[name] ?? ''} onChange={(event) => setFormValues((current) => ({ ...current, [name]: event.target.value }))} className="mt-1.5 w-full rounded-md border bg-background px-3 py-2 text-sm"><option value="">请选择</option>{field.enum.map((option) => <option key={option} value={option}>{option}</option>)}</select> : <textarea value={formValues[name] ?? ''} onChange={(event) => setFormValues((current) => ({ ...current, [name]: event.target.value }))} placeholder={field.type === 'array' || field.type === 'object' ? '请输入结构化内容' : `请输入${fieldLabel(name, field)}`} className="mt-1.5 min-h-20 w-full rounded-md border bg-background p-3 text-sm outline-none focus:ring-2 focus:ring-ring" />}</label>)}</div>{selectedAgent && selectedAgent.health.status !== 'configured' && <p className="mt-4 rounded-md bg-amber-500/10 p-3 text-sm text-amber-700">此 Agent 尚未可用：管理员还需配置 {selectedAgent.health.missingReferences.join('、')}。</p>}<button disabled={!selectedAgent || busy || selectedAgent.health.status !== 'configured'} onClick={() => void runAgent()} className="mt-4 inline-flex items-center gap-2 rounded-md bg-foreground px-3 py-2 text-sm font-medium text-background disabled:opacity-50"><Play className="h-4 w-4" />{busy ? '执行中…' : '提交任务并记录用量'}</button></section>
         {result !== null && <section className="rounded-xl border bg-card p-4"><h2 className="font-medium">映射后的执行结果</h2><pre className="mt-3 max-h-[440px] overflow-auto rounded-md bg-muted p-3 text-xs leading-5">{String(JSON.stringify(result, null, 2) ?? '')}</pre></section>}</div>
       </section>}
 

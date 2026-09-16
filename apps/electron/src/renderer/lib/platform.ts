@@ -41,6 +41,16 @@ export const isWebUI: boolean = Boolean(
   (import.meta as { env?: { IS_WEBUI?: unknown } }).env?.IS_WEBUI,
 )
 
+/** Browser company deployment marker, injected after authenticated bootstrap. */
+export const isOrganizationWebUI: boolean = isWebUI
+  && typeof window !== 'undefined'
+  && (window as { __CRAFT_TEAM_MODE__?: unknown }).__CRAFT_TEAM_MODE__ === true
+
+/** Role is server-authenticated and used only to shape the browser navigation. */
+export const organizationRole: 'admin' | 'member' | undefined = isOrganizationWebUI
+  ? (window as { __CRAFT_TEAM_IDENTITY__?: { role?: 'admin' | 'member' } }).__CRAFT_TEAM_IDENTITY__?.role
+  : undefined
+
 /**
  * Get the platform-specific file manager name.
  * macOS → "Finder", Windows → "Explorer", Linux → "File Manager"

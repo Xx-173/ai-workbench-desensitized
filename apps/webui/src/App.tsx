@@ -44,8 +44,20 @@ export default function App() {
       // This authenticated endpoint exists only in organization mode. The
       // shared Craft renderer uses the marker to skip personal-provider setup.
       const teamRes = await fetch('/api/workbench/bootstrap', { credentials: 'same-origin' })
-      if (teamRes.ok) (window as any).__CRAFT_TEAM_MODE__ = true
+      let isTeamMode = false
+      if (teamRes.ok) {
+        isTeamMode = true
+        const teamBootstrap = await teamRes.json() as { identity?: { role?: 'admin' | 'member' } }
+        ;(window as any).__CRAFT_TEAM_MODE__ = true
+        ;(window as any).__CRAFT_TEAM_IDENTITY__ = teamBootstrap.identity
+      }
       const params = new URLSearchParams(window.location.search)
+      // Give an employee a useful first screen rather than Craft's generic
+      // session filters. Explicit deep links (projects/tasks) remain intact.
+      if (isTeamMode && !params.get('route')) {
+        params.set('route', 'workbench')
+        window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`)
+      }
       let workspaceId = params.get('workspace') ?? undefined
       if (!workspaceId) {
         try {

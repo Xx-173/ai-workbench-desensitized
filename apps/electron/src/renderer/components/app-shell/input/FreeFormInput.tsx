@@ -50,7 +50,7 @@ import {
 } from '@/components/ui/styled-dropdown'
 import { cn } from '@/lib/utils'
 import { coerceInputText } from '@/lib/input-text'
-import { isMac } from '@/lib/platform'
+import { isMac, isOrganizationWebUI } from '@/lib/platform'
 import { applySmartTypography } from '@/lib/smart-typography'
 import { AttachmentPreview } from '../AttachmentPreview'
 import { ImageSupportWarningBanner } from './ImageSupportWarningBanner'
@@ -1811,7 +1811,7 @@ export function FreeFormInput({
               onPermissionModeChange={onPermissionModeChange}
             />
           )}
-          {enableCompactModelPicker && (
+          {enableCompactModelPicker && !isOrganizationWebUI && (
             <CompactModelSelector
               currentModel={currentModel}
               currentConnection={currentConnection}
@@ -2014,7 +2014,6 @@ export function FreeFormInput({
               />
             </div>
           )}
-
           {/* 3. Working Directory Selector Badge */}
           {onWorkingDirectoryChange && (
             <WorkingDirectoryBadge
@@ -2048,7 +2047,7 @@ export function FreeFormInput({
           {/* Right side: Model + Send - never shrink so they're always visible */}
           <div className="flex items-center shrink-0">
           {/* 5. Model/Connection Selector - Hidden in compact mode (EditPopover embedding) */}
-          {!compactMode && (
+          {!compactMode && !isOrganizationWebUI && (
           <DropdownMenu open={modelDropdownOpen} onOpenChange={setModelDropdownOpen}>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -2399,6 +2398,9 @@ export function FreeFormInput({
               )}
             </StyledDropdownMenuContent>
           </DropdownMenu>
+          )}
+          {isOrganizationWebUI && (
+            <span className="mr-2 text-xs text-muted-foreground">公司默认模型</span>
           )}
 
           {/* 5.5 Context Usage Warning Badge - shows when approaching auto-compaction threshold */}

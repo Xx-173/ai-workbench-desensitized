@@ -41,7 +41,7 @@ import { TopBar } from "./TopBar"
 import { SquarePenRounded } from "../icons/SquarePenRounded"
 import { McpIcon } from "../icons/McpIcon"
 import { cn } from "@/lib/utils"
-import { isMac } from "@/lib/platform"
+import { isMac, isOrganizationWebUI, organizationRole } from "@/lib/platform"
 import { Button } from "@/components/ui/button"
 import { HeaderIconButton } from "@/components/ui/HeaderIconButton"
 import { resolveInheritedFilterParams, type FilterMode } from "./inherited-filter-params"
@@ -536,6 +536,7 @@ function AppShellContent({
   } = contextValue
 
   const { t } = useTranslation()
+  const isOrganizationMember = isOrganizationWebUI && organizationRole !== 'admin'
 
   // Get hotkey labels from centralized action registry
   const newChatHotkey = useActionLabel('app.newChat').hotkey
@@ -2431,7 +2432,7 @@ function AppShellContent({
                               data-tutorial="new-chat-button"
                             >
                               <SquarePenRounded className="h-3.5 w-3.5 shrink-0" />
-                              {t("session.newSession")}
+                              {isOrganizationWebUI ? '新建任务' : t("session.newSession")}
                             </Button>
                           </ContextMenuTrigger>
                           <StyledContextMenuContent>
@@ -2457,7 +2458,7 @@ function AppShellContent({
                     // All Sessions: expandable with status children (sortable) + Flagged & Archived as trailing items
                     {
                       id: "nav:allSessions",
-                      title: t("sidebar.allSessions"),
+                      title: isOrganizationWebUI ? '我的任务' : t("sidebar.allSessions"),
                       label: String(workspaceSessionMetas.length),
                       icon: Inbox,
                       variant: sessionFilter?.kind === 'allSessions' ? "default" : "ghost",
@@ -2528,6 +2529,7 @@ function AppShellContent({
                     {
                       id: "nav:labels",
                       title: t("sidebar.labels"),
+                      hidden: isOrganizationMember,
                       icon: Tag,
                       // Only highlighted when "Labels" itself is selected (not sub-labels)
                       variant: (sessionFilter?.kind === 'label' && sessionFilter.labelId === '__all__') ? "default" as const : "ghost" as const,
@@ -2549,6 +2551,7 @@ function AppShellContent({
                     {
                       id: "nav:sources",
                       title: t("sidebar.sources"),
+                      hidden: isOrganizationMember,
                       label: String(sources.length),
                       icon: DatabaseZap,
                       variant: (isSourcesNavigation(navState) && !sourceFilter) ? "default" : "ghost",
@@ -2606,6 +2609,7 @@ function AppShellContent({
                     {
                       id: "nav:skills",
                       title: t("sidebar.skills"),
+                      hidden: isOrganizationMember,
                       label: String(skills.length),
                       icon: Zap,
                       variant: isSkillsNavigation(navState) ? "default" : "ghost",
@@ -2642,6 +2646,7 @@ function AppShellContent({
                     {
                       id: "nav:pages",
                       title: t("sidebar.pages"),
+                      hidden: isOrganizationMember,
                       label: String(pages.length),
                       icon: PanelsTopLeft,
                       // Highlight on the library grid only, not when a page is open (mirrors Projects)
@@ -2660,7 +2665,7 @@ function AppShellContent({
                     },
                     {
                       id: "nav:workbench",
-                      title: "AI 工作台",
+                      title: isOrganizationWebUI ? 'Agent 中心' : 'AI 工作台',
                       icon: Bot,
                       variant: isWorkbenchNavigation(navState) ? "default" : "ghost",
                       onClick: handleWorkbenchClick,
@@ -2701,6 +2706,7 @@ function AppShellContent({
                         {
                           id: "nav:automations:agentic",
                           title: t("sidebar.agentic"),
+                          hidden: isOrganizationMember,
                           label: String(automationTypeCounts.agentic),
                           icon: Bot,
                           variant: (automationFilter?.kind === 'type' && automationFilter.automationType === 'agentic') ? "default" : "ghost",
@@ -2715,6 +2721,7 @@ function AppShellContent({
                     {
                       id: "nav:settings",
                       title: t("sidebar.settings"),
+                      hidden: isOrganizationMember,
                       icon: Settings,
                       variant: isSettingsNavigation(navState) ? "default" : "ghost",
                       onClick: () => handleSettingsClick(),
@@ -2723,6 +2730,7 @@ function AppShellContent({
                     {
                       id: "nav:whats-new",
                       title: t("sidebar.whatsNew"),
+                      hidden: isOrganizationMember,
                       icon: hasUnseenReleaseNotes ? (
                         <span className="relative">
                           <Cake className="h-3.5 w-3.5" />
