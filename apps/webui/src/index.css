@@ -1,18 +1,7 @@
-@import "tailwindcss" source(none);
+/* Use Craft's renderer stylesheet as the single Tailwind entrypoint.
+   Loading Tailwind twice makes the browser drop generated utility classes. */
 @import "../../electron/src/renderer/index.css";
-@plugin "@tailwindcss/typography";
 
-@source "../../electron/src/renderer/App.tsx";
-@source "../../electron/src/renderer/main.tsx";
-@source "../../electron/src/renderer/components/**/*.{ts,tsx,jsx}";
-@source "../../electron/src/renderer/contexts/**/*.{ts,tsx,jsx}";
-@source "../../electron/src/renderer/hooks/**/*.{ts,tsx,jsx}";
-@source "../../electron/src/renderer/pages/**/*.{ts,tsx,jsx}";
-@source "../../electron/src/renderer/tabs/**/*.{ts,tsx,jsx}";
-@source "../../../packages/ui/src/components/**/*.{ts,tsx,jsx}";
-@source "../../../packages/ui/src/lib/**/*.{ts,tsx,jsx}";
-@source "./components/**/*.{ts,tsx,jsx}";
-@source "./adapter/**/*.{ts,tsx}";
 @source "./App.tsx";
 @source "./main.tsx";
 
