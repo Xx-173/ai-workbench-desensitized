@@ -63,11 +63,11 @@ cd business/agent-workbench
 npm run serve:mcp -- --session-id demo-1 --workspace-root /absolute/path/to/workspace --agents-config /safe/path/agents.json
 ```
 
-不带 `--agents-config` 时，服务仍提供仓库内五个示例工具；带 Manifest 可选择 `includeBuiltinAgents: false`，只暴露你的业务 Agent。当前业务层测试为 90 个用例，覆盖注册、三类 Agent 适配、凭据模式与静态密钥拦截、加密密钥库、控制中心、结果脱敏映射、团队目录、团队鉴权 API、重试/限流/配额、用量脱敏、MCP 调用、Lengshan 签名与幂等、任务隔离、降级和访问撤销。
+不带 `--agents-config` 时，服务仍提供仓库内五个示例工具；带 Manifest 可选择 `includeBuiltinAgents: false`，只暴露你的业务 Agent。当前业务层测试为 87 个用例，覆盖注册、三类 Agent 适配、凭据模式与静态密钥拦截、加密密钥库、控制中心、结果脱敏映射、团队目录、团队鉴权 API、重试/限流/配额、用量脱敏、MCP 调用、任务隔离、降级和访问撤销。
 
 ### 启动本地控制中心
 
-控制中心默认只监听 `127.0.0.1:4318`，管理状态位于指定 Workspace 的 `.agent-workbench/`。先生成并妥善保管一个 32 字节 Base64 主密钥；它不应写入配置文件或提交到仓库。企业上线清单见 [`docs/team-deployment.md`](docs/team-deployment.md)，Lengshan/企业微信字段边界见 [`docs/integrations/lengshan.md`](docs/integrations/lengshan.md)。
+控制中心默认只监听 `127.0.0.1:4318`，管理状态位于指定 Workspace 的 `.agent-workbench/`。先生成并妥善保管一个 32 字节 Base64 主密钥；它不应写入配置文件或提交到仓库。企业上线清单见 [`docs/team-deployment.md`](docs/team-deployment.md)。企微消息中转属于独立的 AI 销售项目，不在本工作台仓库内实现。
 
 ```powershell
 $env:AGENT_WORKBENCH_MASTER_KEY = node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
