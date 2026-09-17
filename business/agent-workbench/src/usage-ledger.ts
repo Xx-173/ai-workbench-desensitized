@@ -33,6 +33,10 @@ export interface UsageReader {
   listSince(occurredAfter: Date): Promise<readonly AgentUsageEvent[]> | readonly AgentUsageEvent[];
 }
 
+export interface UsageLedger extends UsageRecorder, UsageReader {
+  summarize(): Promise<readonly UsageSummary[]> | readonly UsageSummary[];
+}
+
 export interface UsageSummary {
   readonly agentId: string;
   readonly calls: number;
@@ -45,7 +49,7 @@ export interface UsageSummary {
   readonly outputTokens: number;
 }
 
-export class InMemoryUsageLedger implements UsageRecorder, UsageReader {
+export class InMemoryUsageLedger implements UsageLedger {
   private readonly events: AgentUsageEvent[] = [];
 
   record(event: AgentUsageEvent): void {
@@ -85,7 +89,7 @@ export class InMemoryUsageLedger implements UsageRecorder, UsageReader {
 }
 
 /** JSONL keeps a durable audit trail without introducing a database dependency. */
-export class JsonlUsageLedger implements UsageRecorder, UsageReader {
+export class JsonlUsageLedger implements UsageLedger {
   private readonly path: string;
 
   constructor(path: string) {

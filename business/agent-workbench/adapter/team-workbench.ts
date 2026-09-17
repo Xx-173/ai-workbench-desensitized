@@ -12,13 +12,15 @@ import { join } from 'node:path';
 import { createWorkbenchRegistry } from '../src/index.ts';
 import { AgentControlPlane, FileManifestStore } from '../src/control-plane.ts';
 import { EncryptedFileSecretVault } from '../src/secret-vault.ts';
-import { JsonlUsageLedger, type AgentUsageEvent } from '../src/usage-ledger.ts';
-import { JsonlCaseMemory } from '../src/case-memory.ts';
+import { JsonlUsageLedger, type AgentUsageEvent, type UsageLedger } from '../src/usage-ledger.ts';
+import { JsonlCaseMemory, type CaseMemoryRecorder } from '../src/case-memory.ts';
 import { mapAgentResult } from '../src/result-mapper.ts';
-import { LocalTaskArtifactStore, type TaskArtifactArea, type TaskArtifactStore } from '../src/task-artifacts.ts';
-import { TeamDirectory, type AccountStatus, type TeamRole, type TeamUser } from '../src/team-directory.ts';
+import { LocalTaskArtifactStore, S3TaskArtifactStore, type TaskArtifactArea, type TaskArtifactStore } from '../src/task-artifacts.ts';
+import { TeamDirectory, type AccountStatus, type TeamDirectoryPort, type TeamRole, type TeamUser } from '../src/team-directory.ts';
 import type { JsonObject, JsonValue, ToolContext } from '../src/ports.ts';
 import type { AgentManifest } from '../src/agent-manifest.ts';
+import { createEnterpriseStorage, type EnterpriseStorage } from '../src/enterprise-storage.ts';
+import { RedisTaskQueue, type WorkbenchTaskStatusRecord } from '../src/task-queue.ts';
 
 const SESSION_COOKIE = 'craft_team_session';
 const SESSION_SECONDS = 8 * 60 * 60;
@@ -65,6 +67,16 @@ export interface TeamWorkbenchOptions {
   /** Local by default; replace this with an OSS/S3/MinIO adapter in production. */
   readonly artifactStore?: TaskArtifactStore;
   readonly maxUploadBytes?: number;
+  /** PostgreSQL connection string. Defaults to AGENT_WORKBENCH_DATABASE_URL. */
+  readonly databaseUrl?: string;
+  /** Enables TLS certificate validation policy for managed PostgreSQL. */
+  readonly databaseSsl?: boolean;
+  readonly redisUrl?: string;
+  /** Queue user invocations instead of holding the HTTP request open. */
+  readonly asyncTasks?: boolean;
+  /** Start a Redis consumer in this process (set false for a separate Worker deployment). */
+  readonly startWorker?: boolean;
+  readonly workerConsumer?: string;
 }
 
 export interface TeamAuthProvider {
@@ -117,10 +129,10 @@ function asIdentity(user: TeamUser): TeamIdentity {
 }
 
 class DirectoryAuthProvider implements TeamAuthProvider {
-  private readonly directory: TeamDirectory;
+  private readonly directory: TeamDirectoryPort;
   private readonly secret: string;
 
-  constructor(directory: TeamDirectory, secret: string) {
+  constructor(directory: TeamDirectoryPort, secret: string) {
     this.directory = directory;
     this.secret = secret;
   }
@@ -136,7 +148,7 @@ class DirectoryAuthProvider implements TeamAuthProvider {
     const token = getCookie(cookieHeader, SESSION_COOKIE);
     const payload = token ? this.verify(token) : null;
     if (!payload || payload.exp <= Math.floor(Date.now() / 1000)) return null;
-    const user = this.directory.getUser(payload.userId);
+    const user = await this.directory.getUser(payload.userId);
     return user && user.status === 'active' ? asIdentity(user) : null;
   }
 
@@ -227,27 +239,38 @@ function eventTotals(events: readonly AgentUsageEvent[]) {
   return totals;
 }
 
+export interface QueuedInvocation {
+  readonly identity: TeamIdentity;
+  readonly body: unknown;
+  readonly source: 'user' | 'admin_test';
+  readonly taskId: string;
+}
+
 class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
-  private readonly directory: TeamDirectory;
+  private readonly directory: TeamDirectoryPort;
   private readonly plane: AgentControlPlane;
   private readonly vault: EncryptedFileSecretVault;
-  private readonly usage: JsonlUsageLedger;
-  private readonly caseMemory: JsonlCaseMemory;
+  private readonly usage: UsageLedger;
+  private readonly caseMemory: CaseMemoryRecorder;
   private readonly artifacts: TaskArtifactStore;
   private readonly maxUploadBytes: number;
   private readonly workspaceRootPath: string;
+  private readonly taskQueue?: RedisTaskQueue<QueuedInvocation>;
+  private readonly asyncTasks: boolean;
   private workspaceResolver: ((identity: TeamIdentity) => Promise<string>) | null = null;
   private workspacePathResolver: ((identity: TeamIdentity) => Promise<string>) | null = null;
 
   constructor(
-    directory: TeamDirectory,
+    directory: TeamDirectoryPort,
     plane: AgentControlPlane,
     vault: EncryptedFileSecretVault,
-    usage: JsonlUsageLedger,
-    caseMemory: JsonlCaseMemory,
+    usage: UsageLedger,
+    caseMemory: CaseMemoryRecorder,
     workspaceRootPath: string,
     artifacts: TaskArtifactStore,
     maxUploadBytes: number,
+    taskQueue?: RedisTaskQueue<QueuedInvocation>,
+    asyncTasks = false,
   ) {
     this.directory = directory;
     this.plane = plane;
@@ -257,6 +280,8 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
     this.artifacts = artifacts;
     this.maxUploadBytes = maxUploadBytes;
     this.workspaceRootPath = workspaceRootPath;
+    this.taskQueue = taskQueue;
+    this.asyncTasks = asyncTasks && Boolean(taskQueue);
   }
 
   setWorkspaceResolver(resolver: (identity: TeamIdentity) => Promise<string>): void {
@@ -286,9 +311,18 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
     if (!path.startsWith('/api/workbench')) return null;
     try {
       if (request.method === 'GET' && path === '/api/workbench/bootstrap') return json(await this.bootstrap(identity));
-      if (request.method === 'POST' && path === '/api/workbench/invoke') return json(await this.invokeWithSource(identity, await readJson(request), 'user'));
+      if (request.method === 'POST' && path === '/api/workbench/invoke') {
+        const body = await readJson(request);
+        if (this.asyncTasks && this.taskQueue) return json(await this.enqueueInvocation(identity, body, 'user'), 202);
+        return json(await this.invokeWithSource(identity, body, 'user'));
+      }
       if (request.method === 'GET' && path === '/api/workbench/usage/me') return json(await this.usageFor(identity.userId, parseUsageFilter(new URL(request.url))));
       if (request.method === 'POST' && path === '/api/workbench/tasks') return json({ taskId: this.newTaskId(identity), workspaceId: await this.getDefaultWorkspaceId(identity) }, 201);
+      const taskStatusMatch = path.match(/^\/api\/workbench\/tasks\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/status$/);
+      if (taskStatusMatch && request.method === 'GET') {
+        this.assertTaskAccess(identity, taskStatusMatch[1]!);
+        return json(await this.taskStatus(taskStatusMatch[1]!));
+      }
       const taskListMatch = path.match(/^\/api\/workbench\/tasks\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/artifacts$/);
       if (taskListMatch && request.method === 'GET') {
         this.assertTaskAccess(identity, taskListMatch[1]!);
@@ -297,6 +331,11 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
       if (taskListMatch && request.method === 'POST') {
         this.assertTaskAccess(identity, taskListMatch[1]!);
         return json(await this.uploadArtifact(request, identity, taskListMatch[1]!), 201);
+      }
+      const presignMatch = path.match(/^\/api\/workbench\/tasks\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/artifacts\/presign$/);
+      if (presignMatch && request.method === 'POST') {
+        this.assertTaskAccess(identity, presignMatch[1]!);
+        return json(await this.presignArtifact(request, identity, presignMatch[1]!));
       }
       const taskFileMatch = path.match(/^\/api\/workbench\/tasks\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/artifacts\/(inputs|outputs|tmp)\/(.+)$/);
       if (taskFileMatch && request.method === 'GET') {
@@ -314,12 +353,12 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
       }
       if (identity.role !== 'admin') return json({ error: 'Administrator role required' }, 403);
 
-      if (request.method === 'GET' && path === '/api/workbench/departments') return json(this.directory.listDepartments());
+      if (request.method === 'GET' && path === '/api/workbench/departments') return json(await this.directory.listDepartments());
       if (request.method === 'POST' && path === '/api/workbench/departments') {
         const body = requireObject(await readJson(request));
         return json(await this.directory.createDepartment(requireString(body.name, 'name')), 201);
       }
-      if (request.method === 'GET' && path === '/api/workbench/users') return json(this.directory.listUsers());
+      if (request.method === 'GET' && path === '/api/workbench/users') return json(await this.directory.listUsers());
       if (request.method === 'POST' && path === '/api/workbench/users') return json(await this.createUser(await readJson(request)), 201);
       const userMatch = path.match(/^\/api\/workbench\/users\/([0-9a-f-]+)$/i);
       if (request.method === 'PATCH' && userMatch) return json(await this.updateUser(userMatch[1]!, await readJson(request)));
@@ -360,7 +399,7 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
       agents,
       ownUsage: await this.usageFor(identity.userId),
       ...(identity.role === 'admin' ? {
-        departments: this.directory.listDepartments(), users: this.directory.listUsers(), teamUsage: await this.teamUsage(),
+        departments: await this.directory.listDepartments(), users: await this.directory.listUsers(), teamUsage: await this.teamUsage(),
       } : {}),
     };
   }
@@ -375,7 +414,7 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
 
   private async getTaskWorkspacePath(identity: TeamIdentity, taskId: string): Promise<string> {
     if (identity.role !== 'admin') return this.getWorkspacePath(identity);
-    const owner = this.directory.listUsers().find((user) => taskId.startsWith(`web-${user.id}-`));
+    const owner = (await this.directory.listUsers()).find((user) => taskId.startsWith(`web-${user.id}-`));
     if (!owner) throw new ForbiddenError('Task owner was not found');
     return this.getWorkspacePath(asIdentity(owner));
   }
@@ -395,6 +434,18 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
         bytes: new Uint8Array(await file.arrayBuffer()),
       }),
     };
+  }
+
+  private async presignArtifact(request: Request, identity: TeamIdentity, taskId: string) {
+    if (!this.artifacts.createPresignedUploadUrl) throw new Error('Direct OSS upload is not configured; use multipart upload or configure S3/OSS');
+    const body = requireObject(await readJson(request));
+    const filename = requireString(body.filename, 'filename');
+    const mimeType = body.mimeType === undefined ? undefined : requireString(body.mimeType, 'mimeType');
+    const area = body.area === 'outputs' || body.area === 'tmp' ? body.area : 'inputs';
+    return this.artifacts.createPresignedUploadUrl({
+      workspacePath: await this.getTaskWorkspacePath(identity, taskId), taskId, area, filename,
+      ...(mimeType ? { mimeType } : {}),
+    });
   }
 
   private async invokeWithSource(identity: TeamIdentity, input: unknown, source: 'user' | 'admin_test') {
@@ -425,6 +476,29 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
     const result = await registry.invoke(agent.id, context, asJsonObject(body.input));
     const mapped = result.raw === undefined ? null : mapAgentResult(result.raw);
     return { taskId, summary: result.summary, artifacts: [...new Set([...(result.artifacts ?? []), ...(mapped?.artifacts ?? [])])], mapped };
+  }
+
+  private async enqueueInvocation(identity: TeamIdentity, input: unknown, source: 'user' | 'admin_test') {
+    if (!this.taskQueue) throw new Error('Redis task queue is not configured');
+    const body = requireObject(input);
+    const taskId = body.taskId === undefined ? this.newTaskId(identity) : requireString(body.taskId, 'taskId');
+    this.assertTaskAccess(identity, taskId);
+    const agentId = requireString(body.agentId, 'agentId');
+    const config = await this.plane.getConfig();
+    const agent = config.agents.find((entry) => entry.id === agentId && entry.enabled !== false);
+    if (!agent) throw new Error('Unknown agent');
+    if (!this.canUseAgent(identity, agent)) throw new ForbiddenError('You are not allowed to use this Agent');
+    await this.taskQueue.enqueue({ identity, body, source, taskId });
+    return { taskId, status: 'queued' as const };
+  }
+
+  async processQueuedInvocation(payload: QueuedInvocation): Promise<unknown> {
+    return this.invokeWithSource(payload.identity, payload.body, payload.source);
+  }
+
+  private async taskStatus(taskId: string): Promise<WorkbenchTaskStatusRecord | { taskId: string; status: 'not_queued' }> {
+    if (!this.taskQueue) return { taskId, status: 'not_queued' };
+    return await this.taskQueue.getStatus(taskId) ?? { taskId, status: 'not_queued' };
   }
 
   private async updateAgent(agentId: string, input: unknown) {
@@ -498,8 +572,8 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
 
   private async teamUsage(filter: UsageFilter = { includeTests: false }) {
     const events = this.filterUsageEvents(await this.usage.listSince(new Date(filter.from ?? 0)), filter);
-    const departments = new Map(this.directory.listDepartments().map((department) => [department.id, department.name]));
-    const users = new Map(this.directory.listUsers().map((user) => [user.id, user]));
+    const departments = new Map((await this.directory.listDepartments()).map((department) => [department.id, department.name]));
+    const users = new Map((await this.directory.listUsers()).map((user) => [user.id, user]));
     return {
       total: eventTotals(events),
       byDepartment: this.groupUsage(events, (event) => event.departmentId ?? 'unassigned', (id) => departments.get(id) ?? '未分配'),
@@ -537,28 +611,79 @@ export async function createTeamWorkbenchRuntime(options: TeamWorkbenchOptions):
   authProvider: TeamAuthProvider;
   httpApi: WorkbenchHttpApi;
   workspaceControl: TeamWorkspaceControl;
+  taskQueue?: RedisTaskQueue<QueuedInvocation>;
+  /** Closes the optional PostgreSQL pool during graceful shutdown. */
+  close(): Promise<void>;
 }> {
   const controlDir = join(options.workspaceRootPath, '.agent-workbench');
   const bootstrap = options.bootstrapAdmin;
-  const directory = await TeamDirectory.open(options.teamStorePath ?? join(controlDir, 'team.json'), bootstrap ? {
+  let enterprise: EnterpriseStorage | undefined;
+  const databaseUrl = options.databaseUrl ?? process.env.AGENT_WORKBENCH_DATABASE_URL;
+  if (databaseUrl) {
+    enterprise = await createEnterpriseStorage({
+      databaseUrl,
+      ...(options.databaseSsl || process.env.AGENT_WORKBENCH_DATABASE_SSL === 'true' ? { ssl: true } : {}),
+    }, bootstrap ? {
+      adminUsername: bootstrap.username,
+      adminPassword: bootstrap.password,
+      ...(bootstrap.displayName ? { adminDisplayName: bootstrap.displayName } : {}),
+      ...(bootstrap.departmentName ? { departmentName: bootstrap.departmentName } : {}),
+    } : undefined);
+  }
+  const directory: TeamDirectoryPort = enterprise?.directory ?? await TeamDirectory.open(options.teamStorePath ?? join(controlDir, 'team.json'), bootstrap ? {
     adminUsername: bootstrap.username,
     adminPassword: bootstrap.password,
     ...(bootstrap.displayName ? { adminDisplayName: bootstrap.displayName } : {}),
     ...(bootstrap.departmentName ? { departmentName: bootstrap.departmentName } : {}),
   } : undefined);
   const vault = await EncryptedFileSecretVault.open(options.secretStorePath ?? join(controlDir, 'secrets.enc.json'), options.masterKey);
-  const usage = new JsonlUsageLedger(options.usagePath ?? join(controlDir, 'usage.jsonl'));
-  const caseMemory = new JsonlCaseMemory(options.caseMemoryPath ?? join(controlDir, 'case-memory.jsonl'));
-  const artifacts = options.artifactStore ?? new LocalTaskArtifactStore();
+  const usage = enterprise?.usage ?? new JsonlUsageLedger(options.usagePath ?? join(controlDir, 'usage.jsonl'));
+  const caseMemory = enterprise?.caseMemory ?? new JsonlCaseMemory(options.caseMemoryPath ?? join(controlDir, 'case-memory.jsonl'));
+  const artifacts = options.artifactStore ?? createArtifactStoreFromEnvironment() ?? new LocalTaskArtifactStore();
+  const redisUrl = options.redisUrl ?? process.env.AGENT_WORKBENCH_REDIS_URL;
+  const taskQueue = redisUrl ? new RedisTaskQueue<QueuedInvocation>(redisUrl, {
+    ...(process.env.AGENT_WORKBENCH_QUEUE_STREAM ? { stream: process.env.AGENT_WORKBENCH_QUEUE_STREAM } : {}),
+    ...(process.env.AGENT_WORKBENCH_QUEUE_GROUP ? { group: process.env.AGENT_WORKBENCH_QUEUE_GROUP } : {}),
+  }) : undefined;
+  if (taskQueue) await taskQueue.ping();
   const plane = new AgentControlPlane(
-    new FileManifestStore(options.manifestsPath ?? join(controlDir, 'agents.json')),
+    enterprise?.manifests ?? new FileManifestStore(options.manifestsPath ?? join(controlDir, 'agents.json')),
     vault,
     usage,
   );
-  const httpApi = new TeamWorkbenchApi(directory, plane, vault, usage, caseMemory, options.workspaceRootPath, artifacts, options.maxUploadBytes ?? DEFAULT_UPLOAD_LIMIT);
+  const asyncTasks = options.asyncTasks ?? ['1', 'true', 'yes', 'on'].includes((process.env.AGENT_WORKBENCH_ASYNC_TASKS ?? '').toLowerCase());
+  const apiImpl = new TeamWorkbenchApi(directory, plane, vault, usage, caseMemory, options.workspaceRootPath, artifacts, options.maxUploadBytes ?? DEFAULT_UPLOAD_LIMIT, taskQueue, asyncTasks);
+  const workerAbort = taskQueue && asyncTasks && (options.startWorker ?? ['1', 'true', 'yes', 'on'].includes((process.env.AGENT_WORKBENCH_START_WORKER ?? '').toLowerCase()))
+    ? new AbortController() : undefined;
+  if (taskQueue && workerAbort) {
+    void taskQueue.runWorker({
+      consumer: options.workerConsumer ?? process.env.AGENT_WORKBENCH_WORKER_CONSUMER ?? `craft-server-${process.pid}`,
+      signal: workerAbort.signal,
+      handler: async (task) => apiImpl.processQueuedInvocation(task.payload),
+    }).catch((error) => console.error('[workbench-worker] stopped:', error));
+  }
   return {
     authProvider: new DirectoryAuthProvider(directory, options.sessionSecret),
-    httpApi,
-    workspaceControl: httpApi,
+    httpApi: apiImpl,
+    workspaceControl: apiImpl,
+    ...(taskQueue ? { taskQueue } : {}),
+    close: async () => { workerAbort?.abort(); await taskQueue?.close(); await enterprise?.pool.end(); },
   };
+}
+
+function createArtifactStoreFromEnvironment(): TaskArtifactStore | null {
+  const bucket = process.env.S3_BUCKET;
+  const accessKeyId = process.env.S3_ACCESS_KEY_ID ?? process.env.S3_ACCESS_KEY;
+  const secretAccessKey = process.env.S3_SECRET_ACCESS_KEY ?? process.env.S3_SECRET_KEY;
+  if (!bucket || !accessKeyId || !secretAccessKey) return null;
+  const forcePathStyle = ['1', 'true', 'yes', 'on'].includes((process.env.S3_FORCE_PATH_STYLE ?? '').toLowerCase());
+  return new S3TaskArtifactStore({
+    bucket,
+    accessKeyId,
+    secretAccessKey,
+    ...(process.env.S3_ENDPOINT ? { endpoint: process.env.S3_ENDPOINT } : {}),
+    ...(process.env.S3_REGION ? { region: process.env.S3_REGION } : {}),
+    forcePathStyle,
+    ...(process.env.S3_PREFIX ? { prefix: process.env.S3_PREFIX } : {}),
+  });
 }

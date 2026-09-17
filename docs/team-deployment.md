@@ -34,6 +34,39 @@ docker compose --env-file infra/.env.enterprise -f infra/docker-compose.enterpri
 6. 大文件通过独立上传接口进入当前员工 Workspace 的任务 `inputs/`；不要把视频作为普通 JSON 请求发送。生产环境应将 `LocalTaskArtifactStore` 替换为 OSS/S3/MinIO 实现，并使用预签名上传 URL，避免 Craft Server 进程承载大文件内存。
 7. 使用 Redis 队列和独立 Worker 执行视频解析、音频生成等长任务；浏览器只轮询任务状态或接收 SSE/WebSocket 进度。
 
+## 连接企业后端
+
+代码已经提供 PostgreSQL、S3/OSS/MinIO 和 Redis Streams 的适配入口。部署服务器时将以下变量注入 Craft Server（不要写入前端）：
+
+```env
+AGENT_WORKBENCH_DATABASE_URL=postgresql://...
+AGENT_WORKBENCH_DATABASE_SSL=true
+AGENT_WORKBENCH_REDIS_URL=rediss://...
+AGENT_WORKBENCH_ASYNC_TASKS=true
+AGENT_WORKBENCH_START_WORKER=true
+S3_ENDPOINT=https://oss-cn-...
+S3_REGION=oss-cn-...
+S3_BUCKET=...
+S3_ACCESS_KEY=...
+S3_SECRET_KEY=...
+```
+
+上线顺序：
+
+1. 先在 PostgreSQL 执行 `infra/postgres/001_init.sql` 和 `002_enterprise_adapters.sql`；
+2. 创建私有 OSS Bucket，并给应用账号最小的 `PutObject/GetObject/ListBucket` 权限；如果浏览器直传，给工作台域名配置 OSS CORS（允许 `PUT` 和 `Content-Type`）；
+3. 启动 Craft Server，确认日志显示数据库和对象存储连接成功；
+4. 启动 Redis Worker，消费 `craft-workbench:tasks` Stream；可以在 Craft Server 进程中设置 `AGENT_WORKBENCH_START_WORKER=true`，也可以由独立 Worker 进程运行同一套运行时；
+5. 用管理员账号测试 Agent，再给员工开放。
+
+如果只设置了数据库地址但没有执行迁移，服务会拒绝启动，而不会悄悄回退到本地文件，避免生产数据分裂。
+
+独立 Worker 可以直接启动：
+
+```powershell
+bun --cwd business/agent-workbench run worker
+```
+
 ## 凭证模式
 
 - `managed`：Key 由管理员保存到服务端加密库，运行时按引用注入；适合 Dify、Fish 和公司统一网关。

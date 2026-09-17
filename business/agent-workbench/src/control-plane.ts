@@ -9,7 +9,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { collectCredentialReferenceNames, parseAgentWorkbenchConfig, type AgentManifest, type AgentWorkbenchConfig } from './agent-manifest.ts';
-import { JsonlUsageLedger, type UsageSummary } from './usage-ledger.ts';
+import { type UsageLedger, type UsageSummary } from './usage-ledger.ts';
 import type { EncryptedFileSecretVault, SecretStatus } from './secret-vault.ts';
 
 export interface AgentHealth {
@@ -57,6 +57,11 @@ export class FileManifestStore {
   }
 }
 
+export interface ManifestStore {
+  read(): Promise<AgentWorkbenchConfig>;
+  write(config: AgentWorkbenchConfig): Promise<void>;
+}
+
 function costFor(summary: UsageSummary, manifest: AgentManifest | undefined): { estimatedCost: number | null; currency: string | null } {
   const cost = manifest?.policy?.cost;
   if (!cost || (cost.inputPerMillion === undefined && cost.outputPerMillion === undefined)) {
@@ -68,14 +73,14 @@ function costFor(summary: UsageSummary, manifest: AgentManifest | undefined): { 
 }
 
 export class AgentControlPlane {
-  private readonly manifests: FileManifestStore;
+  private readonly manifests: ManifestStore;
   private readonly vault: EncryptedFileSecretVault;
-  private readonly usage: JsonlUsageLedger;
+  private readonly usage: UsageLedger;
 
   constructor(
-    manifests: FileManifestStore,
+    manifests: ManifestStore,
     vault: EncryptedFileSecretVault,
-    usage: JsonlUsageLedger,
+    usage: UsageLedger,
   ) {
     this.manifests = manifests;
     this.vault = vault;

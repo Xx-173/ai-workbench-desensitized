@@ -133,7 +133,17 @@ function parseFile(value: unknown): DirectoryFile {
   return candidate as DirectoryFile;
 }
 
-export class TeamDirectory {
+export interface TeamDirectoryPort {
+  listDepartments(): Promise<readonly TeamDepartment[]> | readonly TeamDepartment[];
+  listUsers(): Promise<readonly TeamUser[]> | readonly TeamUser[];
+  getUser(id: string): Promise<TeamUser | null> | TeamUser | null;
+  createDepartment(name: string): Promise<TeamDepartment>;
+  createUser(input: CreateTeamUserInput): Promise<TeamUser>;
+  updateUser(id: string, update: UpdateTeamUserInput): Promise<TeamUser>;
+  authenticate(username: string, password: string): Promise<TeamUser | null>;
+}
+
+export class TeamDirectory implements TeamDirectoryPort {
   private readonly path: string;
   private departments: TeamDepartment[];
   private users: StoredUser[];

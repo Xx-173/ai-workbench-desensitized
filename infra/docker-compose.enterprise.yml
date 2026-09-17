@@ -11,6 +11,7 @@ services:
     volumes:
       - workbench-postgres:/var/lib/postgresql/data
       - ./postgres/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+      - ./postgres/002_enterprise_adapters.sql:/docker-entrypoint-initdb.d/002_enterprise_adapters.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s

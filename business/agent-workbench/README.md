@@ -47,7 +47,7 @@
 
 团队目录默认是单 Craft Server 实例的受限权限 JSON 文件，方便本地/单机演示。生产多实例部署应以实现相同接口的 PostgreSQL / 企业 SSO 替换，并经由 HTTPS/WSS 反向代理提供浏览器访问。
 
-成员通过 `/api/workbench/tasks` 创建任务，再以 `multipart/form-data` 上传输入文件到 `/api/workbench/tasks/:taskId/artifacts`。文件会落在当前成员 Workspace 的 `tasks/:taskId/inputs`；结果通过同一任务的 `outputs` 返回。当前默认是 `LocalTaskArtifactStore`，生产环境应替换为 OSS/S3/MinIO，并由 Redis Worker 执行大文件任务。
+成员通过 `/api/workbench/tasks` 创建任务，再以 `multipart/form-data` 上传输入文件到 `/api/workbench/tasks/:taskId/artifacts`。文件会落在当前成员 Workspace 的 `tasks/:taskId/inputs`；结果通过同一任务的 `outputs` 返回。当前默认是 `LocalTaskArtifactStore`；配置 `S3_BUCKET`、`S3_ACCESS_KEY`、`S3_SECRET_KEY` 后自动切换到 S3/OSS/MinIO，并通过 `/api/workbench/tasks/:taskId/artifacts/presign` 给浏览器签发直传地址。配置 `AGENT_WORKBENCH_REDIS_URL` 和 `AGENT_WORKBENCH_ASYNC_TASKS=true` 后，调用会进入 Redis Streams；设置 `AGENT_WORKBENCH_START_WORKER=true` 启动同进程 Worker，或让独立 Worker 消费同一 Stream。
 
 ## 本地 Control Center
 

@@ -126,6 +126,22 @@ export default function AgentWorkbenchPage() {
     const uploaded: Record<string, string> = {}
     for (const [fieldName, file] of Object.entries(selectedFiles)) {
       if (!file) continue
+      // Production OSS mode uses a pre-signed URL so large videos do not
+      // occupy Craft Server memory. Local preview falls back to multipart.
+      const presignResponse = await fetch(`/api/workbench/tasks/${encodeURIComponent(taskId)}/artifacts/presign`, {
+        method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ filename: file.name, mimeType: file.type || 'application/octet-stream', area: 'inputs' }),
+      })
+      const presignPayload = await presignResponse.json().catch(() => ({})) as { uploadUrl?: string; artifact?: { relativePath?: string }; error?: string }
+      if (presignResponse.ok && presignPayload.uploadUrl && presignPayload.artifact?.relativePath) {
+        const uploadResponse = await fetch(presignPayload.uploadUrl, { method: 'PUT', headers: { 'content-type': file.type || 'application/octet-stream' }, body: file })
+        if (!uploadResponse.ok) throw new Error(`上传 ${file.name} 到对象存储失败`)
+        uploaded[fieldName] = presignPayload.artifact.relativePath
+        continue
+      }
+      if (presignResponse.status !== 400 || !/Direct OSS upload is not configured/i.test(presignPayload.error ?? '')) {
+        throw new Error(presignPayload.error ?? `获取 ${file.name} 上传地址失败`)
+      }
       const form = new FormData()
       form.set('file', file)
       form.set('area', 'inputs')
@@ -150,7 +166,19 @@ export default function AgentWorkbenchPage() {
       const task = await api<{ taskId: string }>('/api/workbench/tasks', { method: 'POST', body: '{}' })
       const uploaded = await uploadTaskFiles(task.taskId)
       const inputValues = { ...formValues, ...uploaded }
-      setResult(await api('/api/workbench/invoke', { method: 'POST', body: JSON.stringify({ taskId: task.taskId, agentId: selectedAgentId, input: toAgentInput(selectedAgent, inputValues) }) }))
+      const invocation = await api<{ status?: string; taskId?: string; result?: unknown; error?: string }>('/api/workbench/invoke', { method: 'POST', body: JSON.stringify({ taskId: task.taskId, agentId: selectedAgentId, input: toAgentInput(selectedAgent, inputValues) }) })
+      if (invocation.status !== 'queued') {
+        setResult(invocation)
+      } else {
+        let completed: unknown = invocation
+        for (let attempt = 0; attempt < 720; attempt += 1) {
+          await new Promise((resolve) => window.setTimeout(resolve, 5000))
+          const status = await api<{ status: string; result?: unknown; error?: string }>(`/api/workbench/tasks/${encodeURIComponent(task.taskId)}/status`)
+          if (status.status === 'succeeded') { completed = status.result ?? status; break }
+          if (status.status === 'failed') throw new Error(status.error ?? '异步任务执行失败')
+        }
+        setResult(completed)
+      }
       await load()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))

@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "eval:video-chapters": "node scripts/run-video-chapter-eval.ts",
     "verify:dify-sandbox": "node scripts/verify-dify-sandbox.ts",
+    "worker": "bun scripts/run-worker.ts",
     "serve:mcp": "node adapter/mcp-server.ts",
     "serve:control": "node adapter/control-center-server.ts"
   },
@@ -18,9 +19,14 @@
     "node": ">=22.6"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@aws-sdk/client-s3": "^3.947.0",
+    "@aws-sdk/s3-request-presigner": "^3.1134.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ioredis": "^6.0.0",
+    "pg": "^8.23.0"
   },
   "devDependencies": {
+    "@types/pg": "^8.23.1",
     "@types/node": "^22.0.0",
     "typescript": "^5.9.3"
   }

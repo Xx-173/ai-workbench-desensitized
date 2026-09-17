@@ -26,6 +26,11 @@
  *   CRAFT_TEAM_ADMIN_PASSWORD   — bootstrap administrator password (required only on first team-mode start)
  *   AGENT_WORKBENCH_MASTER_KEY  — base64 32-byte key used to encrypt Agent credentials at rest in team mode
  *   AGENT_WORKBENCH_ROOT        — persistent workbench state directory (default: ~/.craft-agent/agent-workbench)
+ *   AGENT_WORKBENCH_DATABASE_URL — optional PostgreSQL persistence connection
+ *   AGENT_WORKBENCH_REDIS_URL    — optional Redis Streams queue connection
+ *   S3_BUCKET/S3_ACCESS_KEY/S3_SECRET_KEY — optional S3/OSS/MinIO artifact storage
+ *   AGENT_WORKBENCH_ASYNC_TASKS  — 'true' queues employee Agent runs in Redis
+ *   AGENT_WORKBENCH_START_WORKER — 'true' starts a Redis consumer in this process
  *   CRAFT_MESSAGING_WA_WORKER  — absolute path to worker.cjs (default: packages/messaging-whatsapp-worker/dist/worker.cjs)
  *   CRAFT_MESSAGING_NODE_BIN   — Node binary used to spawn the WhatsApp worker (default: node)
  */
@@ -127,7 +132,7 @@ const serverToken = process.env.CRAFT_SERVER_TOKEN
 // shared WebUI password with admin-provisioned accounts and mounts the
 // authenticated Agent Workbench APIs on the same Craft server.
 const teamMode = process.env.CRAFT_TEAM_MODE === 'true' || process.env.CRAFT_TEAM_MODE === '1'
-let teamWorkbench: { authProvider: any; httpApi: any; workspaceControl: any } | null = null
+let teamWorkbench: { authProvider: any; httpApi: any; workspaceControl: any; taskQueue?: unknown; close?: () => Promise<void> } | null = null
 if (teamMode) {
   const masterKey = process.env.AGENT_WORKBENCH_MASTER_KEY
   const adminUsername = process.env.CRAFT_TEAM_ADMIN_USERNAME
@@ -170,6 +175,9 @@ if (teamMode) {
   })
   teamWorkbench.workspaceControl.setWorkspacePathResolver(resolveTeamWorkspacePath)
   console.log('[team] Administrator-issued accounts and department usage are enabled.')
+  if (teamWorkbench.taskQueue) console.log('[team] Redis task queue is connected.')
+  if (process.env.AGENT_WORKBENCH_DATABASE_URL) console.log('[team] PostgreSQL persistence is connected.')
+  if (process.env.S3_BUCKET) console.log('[team] S3/OSS artifact storage is configured.')
 }
 
 /** In team mode, only organization administrators may alter central model state. */
@@ -456,6 +464,7 @@ const shutdown = async () => {
       console.error('[messaging] dispose failed:', error)
     }
   }
+  await teamWorkbench?.close?.()
   await instance.stop()
   process.exit(0)
 }

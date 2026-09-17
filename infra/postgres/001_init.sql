@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
   department_id text REFERENCES departments(id),
   agent_id text NOT NULL,
   source text NOT NULL CHECK (source IN ('user', 'admin_test')),
+  kind text NOT NULL CHECK (kind IN ('http', 'python', 'mcp')) DEFAULT 'http',
   success boolean NOT NULL,
   duration_ms bigint NOT NULL,
   input_bytes bigint NOT NULL DEFAULT 0,
@@ -77,3 +78,19 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_task ON task_artifacts (task_id, create
 CREATE INDEX IF NOT EXISTS idx_usage_user_time ON usage_events (user_id, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_usage_department_time ON usage_events (department_id, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_usage_agent_time ON usage_events (agent_id, occurred_at DESC);
+
+CREATE TABLE IF NOT EXISTS case_memory (
+  id text PRIMARY KEY,
+  agent_id text NOT NULL,
+  occurred_at timestamptz NOT NULL,
+  outcome text NOT NULL CHECK (outcome IN ('success', 'failure')),
+  input_fingerprint text NOT NULL,
+  input_bytes bigint NOT NULL,
+  output_bytes bigint NOT NULL,
+  duration_ms bigint NOT NULL,
+  attempts integer NOT NULL,
+  strategy text NOT NULL,
+  failure_category text
+);
+
+CREATE INDEX IF NOT EXISTS idx_case_memory_agent_time ON case_memory (agent_id, occurred_at DESC);
