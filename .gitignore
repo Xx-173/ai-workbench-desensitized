@@ -58,6 +58,7 @@ pnpm-lock.yaml
 # Craft Agent local data (sessions, credentials, config)
 .craft-agent/
 apps/webui/vite-preview*.log
+*-preview*.log
 
 # Agent Workbench local manifests and aggregate usage ledger
 .agent-workbench/

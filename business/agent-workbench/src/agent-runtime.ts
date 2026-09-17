@@ -253,6 +253,7 @@ export function createAgentEntries(
           ...(output === undefined ? {} : extractUsage(output)),
           ...(ctx.actor?.userId ? { userId: ctx.actor.userId } : {}),
           ...(ctx.actor?.departmentId ? { departmentId: ctx.actor.departmentId } : {}),
+          ...(ctx.usageSource ? { source: ctx.usageSource } : {}),
         };
         await dependencies.usageRecorder?.record(event);
         const failure = error === undefined ? undefined : failureStrategy(error);

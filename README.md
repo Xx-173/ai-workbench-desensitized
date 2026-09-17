@@ -45,7 +45,7 @@ npm test
 
 复制 [`config/agents.example.json`](business/agent-workbench/config/agents.example.json) 到仓库外的受控路径，按你的密钥管理方案填入**引用名或部署配置**，不要提交实际 Key。示例含视频解析、Fish 兼容音色、Python 话术清洗、Dify 文案和外部 MCP Agent。
 
-管理员在 Craft 的“AI 工作台 → 管理设置”中统一维护公司默认聊天模型和下游 Agent 凭据：聊天模型保存为 Craft 的服务端默认连接，Dify / Fish / HTTP Agent 等地址与 Key 保存进加密凭证库；员工既看不到 Key，也不能选择供应商或改写默认模型。新增 Dify、HTTP、Python 或 MCP Agent 可通过表单完成，复杂限流、权限或输入结构才需要展开高级 Manifest。Dify 工作流需要在对应 Dify 应用的“API 访问”创建应用 API Key（通常以 `app-` 开头）以及 Dify 服务域名；本项目会向该域名的 `/v1/workflows/run` 发起调用。若要限定某项能力的部门或角色，在 Agent 项目中声明：
+管理员在 Craft 的“AI 工作台 → 管理设置”中统一维护公司默认聊天模型和下游 Agent 凭据：聊天模型保存为 Craft 的服务端默认连接，Dify / Fish / HTTP Agent 等地址与 Key 保存进加密凭证库；员工既看不到 Key，也不能选择供应商或改写默认模型。公司聊天模型支持 OpenAI 兼容接口（包括 Agnes 网关）和 Anthropic，Agnes 只需填写网关地址、模型 ID 和网关 Key。新增 Dify、HTTP、Python 或 MCP Agent 可通过表单完成，复杂限流、权限或输入结构才需要展开高级 Manifest。每个 Agent 明确选择 `managed`（工作台托管 Key）、`external`（Agent 自带认证）或 `none`（无需认证）；服务端会拒绝模式与凭证引用不一致的配置，也会拒绝把疑似密钥写进静态请求体。Dify 工作流需要在对应 Dify 应用的“API 访问”创建应用 API Key（通常以 `app-` 开头）以及 Dify 服务域名；本项目会向该域名的 `/v1/workflows/run` 发起调用。若要限定某项能力的部门或角色，在 Agent 项目中声明：
 
 ```json
 "access": {
@@ -63,11 +63,11 @@ cd business/agent-workbench
 npm run serve:mcp -- --session-id demo-1 --workspace-root /absolute/path/to/workspace --agents-config /safe/path/agents.json
 ```
 
-不带 `--agents-config` 时，服务仍提供仓库内五个示例工具；带 Manifest 可选择 `includeBuiltinAgents: false`，只暴露你的业务 Agent。当前业务层测试为 81 个用例，覆盖注册、三类 Agent 适配、凭据缺失、加密密钥库、控制中心、结果脱敏映射、团队目录、团队鉴权 API、重试/限流/配额、用量脱敏、MCP 调用、任务隔离、降级和访问撤销。
+不带 `--agents-config` 时，服务仍提供仓库内五个示例工具；带 Manifest 可选择 `includeBuiltinAgents: false`，只暴露你的业务 Agent。当前业务层测试为 90 个用例，覆盖注册、三类 Agent 适配、凭据模式与静态密钥拦截、加密密钥库、控制中心、结果脱敏映射、团队目录、团队鉴权 API、重试/限流/配额、用量脱敏、MCP 调用、Lengshan 签名与幂等、任务隔离、降级和访问撤销。
 
 ### 启动本地控制中心
 
-控制中心默认只监听 `127.0.0.1:4318`，管理状态位于指定 Workspace 的 `.agent-workbench/`。先生成并妥善保管一个 32 字节 Base64 主密钥；它不应写入配置文件或提交到仓库。
+控制中心默认只监听 `127.0.0.1:4318`，管理状态位于指定 Workspace 的 `.agent-workbench/`。先生成并妥善保管一个 32 字节 Base64 主密钥；它不应写入配置文件或提交到仓库。企业上线清单见 [`docs/team-deployment.md`](docs/team-deployment.md)，Lengshan/企业微信字段边界见 [`docs/integrations/lengshan.md`](docs/integrations/lengshan.md)。
 
 ```powershell
 $env:AGENT_WORKBENCH_MASTER_KEY = node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"

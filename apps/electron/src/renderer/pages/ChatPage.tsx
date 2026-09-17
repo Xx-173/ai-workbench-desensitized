@@ -8,7 +8,7 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { AlertCircle, Globe, Copy, RefreshCw, Link2Off, Info, Pencil } from 'lucide-react'
+import { AlertCircle, Globe, Copy, RefreshCw, Link2Off, Info, Pencil, Bot } from 'lucide-react'
 import { ChatDisplay, type ChatDisplayHandle } from '@/components/app-shell/ChatDisplay'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { SessionMenu } from '@/components/app-shell/SessionMenu'
@@ -23,6 +23,7 @@ import { useAppShellContext, usePendingPermission, usePendingCredential, useSess
 import { rendererPerf } from '@/lib/perf'
 import { isAbsolutePath } from '@/lib/drafts'
 import { navigate, routes } from '@/lib/navigate'
+import { isOrganizationWebUI } from '@/lib/platform'
 import { coerceInputText } from '@/lib/input-text'
 import { deriveSessionMessagesLoadState, formatSessionLoadFailure } from '@/lib/session-load'
 import { ensureSessionMessagesLoadedAtom, forceSessionMessagesReloadAtom, loadedSessionsAtom, sessionMetaMapAtom } from '@/atoms/sessions'
@@ -638,9 +639,24 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     )
   }, [isTaskOrchestrator, handleEditTask, t])
 
+  // Keep the Agent workbench a first-class Craft entry point in company WebUI.
+  // The workbench owns the structured input form and result mapping; this
+  // shortcut preserves the current conversation while taking the user there.
+  const agentWorkbenchButton = React.useMemo(() => {
+    if (!isOrganizationWebUI) return undefined
+    return (
+      <PanelHeaderCenterButton
+        icon={<Bot className="h-4 w-4" />}
+        tooltip="打开 Agent 工作台"
+        onClick={() => navigate(routes.view.workbench())}
+      />
+    )
+  }, [])
+
   const primaryHeaderAction = isCompactMode ? compactInfoButton : shareButton
-  const headerActions = editTaskButton ? (
+  const headerActions = (editTaskButton || agentWorkbenchButton) ? (
     <div className="flex items-center gap-1.5">
+      {agentWorkbenchButton}
       {editTaskButton}
       {primaryHeaderAction}
     </div>

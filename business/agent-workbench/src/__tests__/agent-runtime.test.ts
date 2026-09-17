@@ -178,3 +178,28 @@ test('the parser accepts generic HTTP, Python and MCP manifests but rejects dupl
     /duplicate toolName/,
   );
 });
+
+test('credential modes make ownership explicit and reject literal secrets in static payloads', () => {
+  const external = parseAgentWorkbenchConfig({ agents: [{
+    id: 'external-http', toolName: 'external_http', description: 'External auth', kind: 'http', credentialMode: 'external',
+    inputSchema: { type: 'object', properties: {} }, config: { baseUrlEnv: 'EXTERNAL_BASE_URL', path: '/run' },
+  }] });
+  assert.equal(external.agents[0]?.credentialMode, 'external');
+  assert.deepEqual(collectCredentialReferenceNames(external.agents), ['EXTERNAL_BASE_URL']);
+
+  const noAuth = parseAgentWorkbenchConfig({ agents: [{
+    id: 'public-http', toolName: 'public_http', description: 'No auth', kind: 'http', credentialMode: 'none',
+    inputSchema: { type: 'object', properties: {} }, config: { baseUrlEnv: 'PUBLIC_BASE_URL', path: '/run' },
+  }] });
+  assert.equal(noAuth.agents[0]?.credentialMode, 'none');
+  assert.deepEqual(collectCredentialReferenceNames(noAuth.agents), ['PUBLIC_BASE_URL']);
+
+  assert.throws(() => parseAgentWorkbenchConfig({ agents: [{
+    id: 'unsafe-http', toolName: 'unsafe_http', description: 'Unsafe', kind: 'http', credentialMode: 'none',
+    inputSchema: { type: 'object', properties: {} }, config: { baseUrlEnv: 'UNSAFE_BASE_URL', path: '/run', staticBody: { api_key: 'literal' } },
+  }] }), /must use credential references/);
+  assert.throws(() => parseAgentWorkbenchConfig({ agents: [{
+    id: 'mismatch-http', toolName: 'mismatch_http', description: 'Mismatch', kind: 'http', credentialMode: 'none',
+    inputSchema: { type: 'object', properties: {} }, config: { baseUrlEnv: 'MISMATCH_BASE_URL', tokenEnv: 'MISMATCH_TOKEN', path: '/run' },
+  }] }), /credentialMode and tokenEnv do not match/);
+});

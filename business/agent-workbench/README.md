@@ -23,7 +23,7 @@
 
 | `kind` | 运行方式 | 密钥处理 |
 | --- | --- | --- |
-| `http` | `input`、`dify-workflow`、`coze-workflow` 三种 JSON 载荷 | 基座按 `baseUrlEnv` / `tokenEnv` 引用读取，缺失即失败 |
+| `http` | `input`、`dify-workflow`、`coze-workflow` 三种 JSON 载荷 | `managed` 按 `baseUrlEnv` / `tokenEnv` 引用读取；`external`/`none` 不注入 Token，缺失配置即失败 |
 | `python` | 管理员指定脚本从 stdin 接收 JSON、向 stdout 输出一个 JSON 值 | 仅通过 `credentials` 显式映射给子进程；`shell: false` |
 | `mcp` | 作为 stdio MCP Client 启动受控外部服务并调用其工具 | 同样只注入显式凭据别名；`shell: false` |
 
@@ -43,7 +43,7 @@
 
 ## Craft 原生工作台与团队模式
 
-启用 `CRAFT_TEAM_MODE=true` 后，Craft WebUI 登录改为管理员开通的“用户名 + 密码”。账号密码使用 scrypt 加盐哈希，浏览器使用 HttpOnly / SameSite 会话 Cookie；每次 HTTP 请求和新的 WebSocket 握手都会校验账号仍处于启用状态。浏览器仍加载 Craft 原生对话、会话与 Workspace；管理员可在左侧“AI 工作台”内维护部门、创建/禁用人员账号、查看部门/个人/Agent 聚合用量，并安全配置 Agent；普通成员只显示获授权 Agent 和自己的用量。
+启用 `CRAFT_TEAM_MODE=true` 后，Craft WebUI 登录改为管理员开通的“用户名 + 密码”。账号密码使用 scrypt 加盐哈希，浏览器使用 HttpOnly / SameSite 会话 Cookie；每次 HTTP 请求和新的 WebSocket 握手都会校验账号仍处于启用状态。浏览器仍加载 Craft 原生对话、会话与 Workspace；管理员可在左侧“AI 工作台”内维护部门、创建/禁用人员账号、查看部门/个人/Agent 聚合用量，并安全配置 Agent；普通成员只显示获授权 Agent 和自己的用量。管理员还能测试、启用/禁用和删除已发布 Agent；测试调用默认标记为 `admin_test`，可在团队用量 API 通过 `includeTests=true` 审计。
 
 团队目录默认是单 Craft Server 实例的受限权限 JSON 文件，方便本地/单机演示。生产多实例部署应以实现相同接口的 PostgreSQL / 企业 SSO 替换，并经由 HTTPS/WSS 反向代理提供浏览器访问。
 

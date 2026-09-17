@@ -62,6 +62,18 @@ test('department-scoped Agents are hidden and denied by the server for other mem
       ] }),
     }), admin.identity);
     assert.equal(configResponse?.status, 200);
+    const adminBootstrap = await runtime.httpApi.fetch(new Request('http://local/api/workbench/bootstrap'), admin.identity);
+    const adminPayload = await adminBootstrap?.json() as { agents: Array<{ id: string; enabled?: boolean; credentialMode?: string }> };
+    assert.equal(adminPayload.agents.find((agent) => agent.id === 'marketing-copy')?.enabled, true);
+
+    const disabled = await runtime.httpApi.fetch(new Request('http://local/api/workbench/agents/marketing-copy', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: false }),
+    }), admin.identity);
+    assert.equal(disabled?.status, 200);
+    const disabledBootstrap = await runtime.httpApi.fetch(new Request('http://local/api/workbench/bootstrap'), admin.identity);
+    const disabledPayload = await disabledBootstrap?.json() as { agents: Array<{ id: string; enabled?: boolean }> };
+    assert.equal(disabledPayload.agents.find((agent) => agent.id === 'marketing-copy')?.enabled, false);
+
     const member = await runtime.authProvider.authenticate({ username: 'member', password: 'very-strong-password' }, { ip: 'test' });
     assert.ok(member);
     runtime.workspaceControl.setWorkspaceResolver(async (identity) => `workspace-${identity.userId}`);
@@ -69,7 +81,7 @@ test('department-scoped Agents are hidden and denied by the server for other mem
     assert.equal(await runtime.workspaceControl.canAccessWorkspace(member.identity, 'another-workspace'), false);
     const bootstrap = await runtime.httpApi.fetch(new Request('http://local/api/workbench/bootstrap'), member.identity);
     const payload = await bootstrap?.json() as { agents: Array<{ id: string }> };
-    assert.deepEqual(payload.agents.map((agent) => agent.id), ['marketing-copy']);
+    assert.deepEqual(payload.agents.map((agent) => agent.id), []);
     const denied = await runtime.httpApi.fetch(new Request('http://local/api/workbench/invoke', {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ agentId: 'finance-copy', input: {} }),
     }), member.identity);

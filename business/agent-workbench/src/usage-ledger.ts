@@ -22,6 +22,7 @@ export interface AgentUsageEvent {
   /** Identity dimensions only; prompts, outputs, endpoints and secrets are never recorded. */
   readonly userId?: string;
   readonly departmentId?: string;
+  readonly source?: 'user' | 'admin_test';
 }
 
 export interface UsageRecorder {

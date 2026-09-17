@@ -58,6 +58,8 @@ export interface ToolContext {
     readonly userId: string;
     readonly departmentId?: string;
   };
+  /** Distinguishes employee work from an administrator's connection test. */
+  readonly usageSource?: 'user' | 'admin_test';
 }
 
 export interface CredentialReader {

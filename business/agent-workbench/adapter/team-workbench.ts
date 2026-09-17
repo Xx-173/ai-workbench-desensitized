@@ -184,6 +184,24 @@ function requireString(value: unknown, label: string): string {
   return value;
 }
 
+interface UsageFilter {
+  readonly from?: number;
+  readonly to?: number;
+  readonly includeTests: boolean;
+}
+
+function parseUsageFilter(url: URL): UsageFilter {
+  const parse = (value: string | null): number | undefined => {
+    if (!value) return undefined;
+    const timestamp = Date.parse(value.length === 10 ? `${value}T00:00:00.000Z` : value);
+    return Number.isFinite(timestamp) ? timestamp : undefined;
+  };
+  const toRaw = url.searchParams.get('to');
+  const parsedTo = parse(toRaw);
+  const to = parsedTo === undefined || !toRaw || toRaw.length !== 10 ? parsedTo : parsedTo + 86_400_000;
+  return { from: parse(url.searchParams.get('from')), to, includeTests: url.searchParams.get('includeTests') === 'true' };
+}
+
 function asJsonObject(value: unknown): JsonObject {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('input must be a JSON object');
   return value as JsonObject;
@@ -246,8 +264,8 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
     if (!path.startsWith('/api/workbench')) return null;
     try {
       if (request.method === 'GET' && path === '/api/workbench/bootstrap') return json(await this.bootstrap(identity));
-      if (request.method === 'POST' && path === '/api/workbench/invoke') return json(await this.invoke(identity, await readJson(request)));
-      if (request.method === 'GET' && path === '/api/workbench/usage/me') return json(await this.usageFor(identity.userId));
+      if (request.method === 'POST' && path === '/api/workbench/invoke') return json(await this.invokeWithSource(identity, await readJson(request), 'user'));
+      if (request.method === 'GET' && path === '/api/workbench/usage/me') return json(await this.usageFor(identity.userId, parseUsageFilter(new URL(request.url))));
       if (identity.role !== 'admin') return json({ error: 'Administrator role required' }, 403);
 
       if (request.method === 'GET' && path === '/api/workbench/departments') return json(this.directory.listDepartments());
@@ -259,9 +277,16 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
       if (request.method === 'POST' && path === '/api/workbench/users') return json(await this.createUser(await readJson(request)), 201);
       const userMatch = path.match(/^\/api\/workbench\/users\/([0-9a-f-]+)$/i);
       if (request.method === 'PATCH' && userMatch) return json(await this.updateUser(userMatch[1]!, await readJson(request)));
-      if (request.method === 'GET' && path === '/api/workbench/usage/team') return json(await this.teamUsage());
+      if (request.method === 'GET' && path === '/api/workbench/usage/team') return json(await this.teamUsage(parseUsageFilter(new URL(request.url))));
       if (request.method === 'GET' && path === '/api/workbench/config') return json(await this.plane.getConfig());
       if (request.method === 'PUT' && path === '/api/workbench/config') return json(await this.plane.replaceConfig(await readJson(request)));
+      const agentMatch = path.match(/^\/api\/workbench\/agents\/([A-Za-z0-9_-]+)$/);
+      if (agentMatch && request.method === 'PATCH') return json(await this.updateAgent(agentMatch[1]!, await readJson(request)));
+      if (agentMatch && request.method === 'DELETE') return json(await this.deleteAgent(agentMatch[1]!));
+      const testMatch = path.match(/^\/api\/workbench\/agents\/([A-Za-z0-9_-]+)\/test$/);
+      if (testMatch && request.method === 'POST') {
+        return json(await this.invokeWithSource(identity, { agentId: testMatch[1], input: await readJson(request) }, 'admin_test'));
+      }
       if (request.method === 'GET' && path === '/api/workbench/secrets') return json(await this.plane.listSecrets());
       if (request.method === 'POST' && path === '/api/workbench/secrets') {
         const body = requireObject(await readJson(request));
@@ -277,9 +302,10 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
 
   private async bootstrap(identity: TeamIdentity) {
     const config = await this.plane.getConfig();
-    const visibleAgents = config.agents.filter((agent) => this.canUseAgent(identity, agent));
+    const visibleAgents = config.agents.filter((agent) => (identity.role === 'admin' || agent.enabled !== false) && this.canUseAgent(identity, agent));
     const agents = await Promise.all(visibleAgents.map(async (agent) => ({
       id: agent.id, toolName: agent.toolName, description: agent.description, kind: agent.kind,
+      credentialMode: agent.credentialMode, enabled: agent.enabled !== false,
       inputSchema: agent.inputSchema, access: agent.access, health: await this.plane.checkAgent(agent.id),
     })));
     return {
@@ -293,11 +319,11 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
     };
   }
 
-  private async invoke(identity: TeamIdentity, input: unknown) {
+  private async invokeWithSource(identity: TeamIdentity, input: unknown, source: 'user' | 'admin_test') {
     const body = requireObject(input);
     const agentId = requireString(body.agentId, 'agentId');
     const config = await this.plane.getConfig();
-    const agent = config.agents.find((entry) => entry.id === agentId);
+    const agent = config.agents.find((entry) => entry.id === agentId && entry.enabled !== false);
     if (!agent) throw new Error('Unknown agent');
     if (!this.canUseAgent(identity, agent)) throw new ForbiddenError('You are not allowed to use this Agent');
     const context: ToolContext = {
@@ -306,6 +332,7 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
       workspacePath: this.workspaceRootPath,
       credentials: this.vault,
       actor: { userId: identity.userId, departmentId: identity.departmentId },
+      usageSource: source,
     };
     const registry = createWorkbenchRegistry({
       agents: [agent], includeBuiltinAgents: false,
@@ -314,6 +341,49 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
     const result = await registry.invoke(agent.id, context, asJsonObject(body.input));
     const mapped = result.raw === undefined ? null : mapAgentResult(result.raw);
     return { summary: result.summary, artifacts: [...new Set([...(result.artifacts ?? []), ...(mapped?.artifacts ?? [])])], mapped };
+  }
+
+  private async updateAgent(agentId: string, input: unknown) {
+    const body = requireObject(input);
+    if (body.enabled !== undefined && typeof body.enabled !== 'boolean') throw new Error('enabled must be a boolean');
+    const config = await this.plane.getConfig();
+    const index = config.agents.findIndex((agent) => agent.id === agentId);
+    if (index < 0) throw new Error(`Unknown agent: ${agentId}`);
+    const agents = config.agents.map((agent, current) => current === index ? {
+      ...agent,
+      ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
+      ...(body.description === undefined ? {} : { description: requireString(body.description, 'description') }),
+    } : agent);
+    return this.plane.replaceConfig({ ...config, agents });
+  }
+
+  private async deleteAgent(agentId: string) {
+    const config = await this.plane.getConfig();
+    const removed = config.agents.find((agent) => agent.id === agentId);
+    if (!removed) throw new Error(`Unknown agent: ${agentId}`);
+    const agents = config.agents.filter((agent) => agent.id !== agentId);
+    const saved = await this.plane.replaceConfig({ ...config, agents });
+    const usedReferences = new Set((await this.plane.getConfig()).agents.flatMap((agent) => {
+      const refs: string[] = [...(agent.credentials ?? [])].map((binding) => binding.source);
+      if (agent.kind === 'http') {
+        const http = agent.config as { baseUrlEnv: string; tokenEnv?: string };
+        refs.push(http.baseUrlEnv, ...(http.tokenEnv ? [http.tokenEnv] : []));
+      }
+      return refs;
+    }));
+    const removedReferences: string[] = [];
+    const removedRefs = [...(removed.credentials ?? [])].map((binding) => binding.source);
+    if (removed.kind === 'http') {
+      const http = removed.config as { baseUrlEnv: string; tokenEnv?: string };
+      removedRefs.push(http.baseUrlEnv, ...(http.tokenEnv ? [http.tokenEnv] : []));
+    }
+    for (const reference of new Set(removedRefs)) {
+      if (!usedReferences.has(reference)) {
+        await this.plane.deleteSecret(reference);
+        removedReferences.push(reference);
+      }
+    }
+    return { ...saved, removedReferences };
   }
 
   private async createUser(input: unknown): Promise<TeamUser> {
@@ -336,14 +406,14 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
     return this.directory.updateUser(id, update);
   }
 
-  private async usageFor(userId: string) {
-    const events = (await this.usage.listSince(new Date(0))).filter((event) => event.userId === userId);
+  private async usageFor(userId: string, filter: UsageFilter = { includeTests: false }) {
+    const events = this.filterUsageEvents(await this.usage.listSince(new Date(filter.from ?? 0)), filter).filter((event) => event.userId === userId);
     const byAgent = this.groupUsage(events, (event) => event.agentId, (id) => id);
     return { ...eventTotals(events), byAgent };
   }
 
-  private async teamUsage() {
-    const events = await this.usage.listSince(new Date(0));
+  private async teamUsage(filter: UsageFilter = { includeTests: false }) {
+    const events = this.filterUsageEvents(await this.usage.listSince(new Date(filter.from ?? 0)), filter);
     const departments = new Map(this.directory.listDepartments().map((department) => [department.id, department.name]));
     const users = new Map(this.directory.listUsers().map((user) => [user.id, user]));
     return {
@@ -352,6 +422,13 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
       byUser: this.groupUsage(events, (event) => event.userId ?? 'unknown', (id) => users.get(id)?.displayName ?? '未知账号'),
       byAgent: this.groupUsage(events, (event) => event.agentId, (id) => id),
     };
+  }
+
+  private filterUsageEvents(events: readonly AgentUsageEvent[], filter: UsageFilter): readonly AgentUsageEvent[] {
+    return events.filter((event) => {
+      const timestamp = Date.parse(event.occurredAt);
+      return (filter.includeTests || event.source !== 'admin_test') && (filter.to === undefined || timestamp < filter.to);
+    });
   }
 
   private canUseAgent(identity: TeamIdentity, agent: AgentManifest): boolean {

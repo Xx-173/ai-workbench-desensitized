@@ -9,6 +9,8 @@
 import type { InputSchema, JsonObject } from './ports.ts';
 
 export type AgentKind = 'http' | 'python' | 'mcp';
+/** Where an Agent obtains its upstream authentication material. */
+export type AgentCredentialMode = 'managed' | 'external' | 'none';
 
 export interface CredentialBinding {
   /** Name exposed to the invoked agent, e.g. `OPENAI_API_KEY`. */
@@ -85,6 +87,10 @@ export interface AgentManifest {
   readonly toolName: string;
   readonly description: string;
   readonly kind: AgentKind;
+  /** `managed` injects only administrator-controlled vault references. */
+  readonly credentialMode?: AgentCredentialMode;
+  /** Disabled manifests remain visible to administrators but are not published. */
+  readonly enabled?: boolean;
   readonly inputSchema: InputSchema;
   readonly credentials?: readonly CredentialBinding[];
   readonly timeoutMs?: number;
@@ -212,6 +218,18 @@ function parsePolicy(value: unknown, id: string): AgentExecutionPolicy | undefin
   };
 }
 
+const SECRET_FIELD = /(api[_-]?key|access[_-]?token|authorization|client[_-]?secret|password|private[_-]?key)/i;
+
+function rejectSecretFields(value: JsonObject, field: string): void {
+  for (const [key, child] of Object.entries(value)) {
+    if (SECRET_FIELD.test(key)) throw new Error(`Invalid agent config: ${field}.${key} must use credential references, not a literal secret`);
+    if (isObject(child)) rejectSecretFields(child as JsonObject, `${field}.${key}`);
+    else if (Array.isArray(child)) {
+      for (const item of child) if (isObject(item)) rejectSecretFields(item as JsonObject, `${field}.${key}`);
+    }
+  }
+}
+
 function parseAccess(value: unknown, id: string): AgentAccessPolicy | undefined {
   if (value === undefined) return undefined;
   if (!isObject(value)) throw new Error(`Invalid agent config: ${id}.access must be an object`);
@@ -237,6 +255,11 @@ function parseManifest(value: unknown, index: number): AgentManifest {
   const toolName = expectIdentifier(value.toolName, `${id}.toolName`, TOOL_NAME);
   const kind = value.kind;
   if (kind !== 'http' && kind !== 'python' && kind !== 'mcp') throw new Error(`Invalid agent config: ${id}.kind`);
+  const credentialMode = value.credentialMode === undefined ? undefined : value.credentialMode as AgentCredentialMode;
+  if (credentialMode !== undefined && credentialMode !== 'managed' && credentialMode !== 'external' && credentialMode !== 'none') {
+    throw new Error(`Invalid agent config: ${id}.credentialMode`);
+  }
+  if (value.enabled !== undefined && typeof value.enabled !== 'boolean') throw new Error(`Invalid agent config: ${id}.enabled`);
   if (!isObject(value.config)) throw new Error(`Invalid agent config: ${id}.config`);
   const policy = parsePolicy(value.policy, id);
   const access = parseAccess(value.access, id);
@@ -245,6 +268,8 @@ function parseManifest(value: unknown, index: number): AgentManifest {
     toolName,
     description: expectString(value.description, `${id}.description`),
     kind,
+    ...(credentialMode === undefined ? {} : { credentialMode }),
+    ...(value.enabled === undefined ? {} : { enabled: value.enabled as boolean }),
     inputSchema: parseSchema(value.inputSchema, id),
     ...(parseCredentials(value.credentials, id) ? { credentials: parseCredentials(value.credentials, id) } : {}),
     ...(policy && Object.keys(policy).length ? { policy } : {}),
@@ -264,13 +289,18 @@ function parseManifest(value: unknown, index: number): AgentManifest {
     if (value.config.staticBody !== undefined && !isObject(value.config.staticBody)) {
       throw new Error(`Invalid agent config: ${id}.config.staticBody must be an object`);
     }
+    const tokenEnv = value.config.tokenEnv === undefined ? undefined : expectIdentifier(value.config.tokenEnv, `${id}.config.tokenEnv`, ENV_NAME);
+    if (credentialMode !== undefined && ((credentialMode === 'managed' && !tokenEnv) || (credentialMode !== 'managed' && tokenEnv))) {
+      throw new Error(`Invalid agent config: ${id}.credentialMode and tokenEnv do not match`);
+    }
+    if (value.config.staticBody !== undefined) rejectSecretFields(value.config.staticBody as JsonObject, `${id}.config.staticBody`);
     return {
       ...common,
       kind,
       config: {
         baseUrlEnv: expectIdentifier(value.config.baseUrlEnv, `${id}.config.baseUrlEnv`, ENV_NAME),
         path: expectString(value.config.path, `${id}.config.path`),
-        ...(value.config.tokenEnv === undefined ? {} : { tokenEnv: expectIdentifier(value.config.tokenEnv, `${id}.config.tokenEnv`, ENV_NAME) }),
+        ...(tokenEnv === undefined ? {} : { tokenEnv }),
         ...(value.config.tokenHeader === undefined ? {} : { tokenHeader: expectString(value.config.tokenHeader, `${id}.config.tokenHeader`) }),
         ...(value.config.tokenPrefix === undefined ? {} : { tokenPrefix: expectString(value.config.tokenPrefix, `${id}.config.tokenPrefix`) }),
         ...(payloadMode === undefined ? {} : { payloadMode }),
@@ -281,6 +311,12 @@ function parseManifest(value: unknown, index: number): AgentManifest {
 
   const command = expectString(value.config.command, `${id}.config.command`);
   const args = parseArgs(value.config.args, `${id}.config.args`);
+  const parsedBindings = parseCredentials(value.credentials, id);
+  if (credentialMode === 'external' && parsedBindings?.length) throw new Error(`Invalid agent config: ${id}.external agents cannot declare managed credentials`);
+  if (credentialMode === 'none' && parsedBindings?.length) throw new Error(`Invalid agent config: ${id}.none agents cannot declare credentials`);
+  if (credentialMode === 'managed' && !parsedBindings?.length && (kind === 'python' || kind === 'mcp')) {
+    // Managed scripts may legitimately need no credentials; this is allowed.
+  }
   if (kind === 'python') return { ...common, kind, config: { command, ...(args ? { args } : {}) } };
   return {
     ...common,
@@ -319,13 +355,15 @@ export function parseAgentWorkbenchConfig(value: unknown): AgentWorkbenchConfig 
 export function collectCredentialReferenceNames(manifests: readonly AgentManifest[]): readonly string[] {
   const names = new Set<string>();
   for (const manifest of manifests) {
-    for (const binding of manifest.credentials ?? []) names.add(binding.source);
+    if (manifest.credentialMode !== 'external' && manifest.credentialMode !== 'none') {
+      for (const binding of manifest.credentials ?? []) names.add(binding.source);
+    }
     if (manifest.kind === 'http') {
       // `AgentManifest` intentionally stores a union for config; kind is the
       // validated discriminator at this boundary.
       const config = manifest.config as HttpAgentConfig;
       names.add(config.baseUrlEnv);
-      if (config.tokenEnv) names.add(config.tokenEnv);
+      if (manifest.credentialMode !== 'external' && manifest.credentialMode !== 'none' && config.tokenEnv) names.add(config.tokenEnv);
     }
   }
   return [...names].sort();
