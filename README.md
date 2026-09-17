@@ -109,6 +109,8 @@ bun run server:prod
 
 Agent 任务也使用同一个服务端 Workspace 根目录：任务的 `inputs/`、`outputs/`、`tmp/` 位于 `AGENT_WORKBENCH_ROOT/craft-workspaces/<departmentId>/<userId>/tasks/<taskId>/`。因此 Agent 生成的章节、字幕、文案和音频引用会随员工 Workspace 保留，浏览器无需把文件写入员工本机；WebUI 只负责预览和下载。
 
+员工可通过工作台上传视频、音频和文档；服务端提供任务级产物列表与下载接口。单机默认使用本地 Workspace，企业部署可按 [`infra/README.md`](infra/README.md) 启动 PostgreSQL、Redis、MinIO 测试组合，再将文件存储切换到 OSS/S3/MinIO、将长任务切换到 Redis Worker。
+
 员工 WebUI 的工作入口按“任务流”收敛：`我的任务` 中保留积压、待办、待审查、完成等状态；员工可以使用项目、定时任务、事件触发和已发布 Agent。数据源、MCP、技能、原始标签、模型切换与设置入口不对成员显示。对话使用组织默认模型；Agent 按 Manifest 自动生成业务输入表单，不要求员工填写 JSON 或接触 Key。管理员仍可在 Agent 中心和设置中配置组织能力。
 
 ### 真实外部 Agent 沙箱验收

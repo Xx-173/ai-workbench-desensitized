@@ -15,6 +15,7 @@ import { EncryptedFileSecretVault } from '../src/secret-vault.ts';
 import { JsonlUsageLedger, type AgentUsageEvent } from '../src/usage-ledger.ts';
 import { JsonlCaseMemory } from '../src/case-memory.ts';
 import { mapAgentResult } from '../src/result-mapper.ts';
+import { LocalTaskArtifactStore, type TaskArtifactArea, type TaskArtifactStore } from '../src/task-artifacts.ts';
 import { TeamDirectory, type AccountStatus, type TeamRole, type TeamUser } from '../src/team-directory.ts';
 import type { JsonObject, JsonValue, ToolContext } from '../src/ports.ts';
 import type { AgentManifest } from '../src/agent-manifest.ts';
@@ -22,6 +23,7 @@ import type { AgentManifest } from '../src/agent-manifest.ts';
 const SESSION_COOKIE = 'craft_team_session';
 const SESSION_SECONDS = 8 * 60 * 60;
 const BODY_LIMIT = 1_000_000;
+const DEFAULT_UPLOAD_LIMIT = 512 * 1024 * 1024;
 
 class ForbiddenError extends Error {
   constructor(message: string) {
@@ -60,6 +62,9 @@ export interface TeamWorkbenchOptions {
   readonly usagePath?: string;
   /** Optional content-free operational case memory path. */
   readonly caseMemoryPath?: string;
+  /** Local by default; replace this with an OSS/S3/MinIO adapter in production. */
+  readonly artifactStore?: TaskArtifactStore;
+  readonly maxUploadBytes?: number;
 }
 
 export interface TeamAuthProvider {
@@ -228,6 +233,8 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
   private readonly vault: EncryptedFileSecretVault;
   private readonly usage: JsonlUsageLedger;
   private readonly caseMemory: JsonlCaseMemory;
+  private readonly artifacts: TaskArtifactStore;
+  private readonly maxUploadBytes: number;
   private readonly workspaceRootPath: string;
   private workspaceResolver: ((identity: TeamIdentity) => Promise<string>) | null = null;
   private workspacePathResolver: ((identity: TeamIdentity) => Promise<string>) | null = null;
@@ -239,12 +246,16 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
     usage: JsonlUsageLedger,
     caseMemory: JsonlCaseMemory,
     workspaceRootPath: string,
+    artifacts: TaskArtifactStore,
+    maxUploadBytes: number,
   ) {
     this.directory = directory;
     this.plane = plane;
     this.vault = vault;
     this.usage = usage;
     this.caseMemory = caseMemory;
+    this.artifacts = artifacts;
+    this.maxUploadBytes = maxUploadBytes;
     this.workspaceRootPath = workspaceRootPath;
   }
 
@@ -277,6 +288,30 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
       if (request.method === 'GET' && path === '/api/workbench/bootstrap') return json(await this.bootstrap(identity));
       if (request.method === 'POST' && path === '/api/workbench/invoke') return json(await this.invokeWithSource(identity, await readJson(request), 'user'));
       if (request.method === 'GET' && path === '/api/workbench/usage/me') return json(await this.usageFor(identity.userId, parseUsageFilter(new URL(request.url))));
+      if (request.method === 'POST' && path === '/api/workbench/tasks') return json({ taskId: this.newTaskId(identity), workspaceId: await this.getDefaultWorkspaceId(identity) }, 201);
+      const taskListMatch = path.match(/^\/api\/workbench\/tasks\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/artifacts$/);
+      if (taskListMatch && request.method === 'GET') {
+        this.assertTaskAccess(identity, taskListMatch[1]!);
+        return json({ artifacts: await this.artifacts.list(await this.getTaskWorkspacePath(identity, taskListMatch[1]!), taskListMatch[1]!) });
+      }
+      if (taskListMatch && request.method === 'POST') {
+        this.assertTaskAccess(identity, taskListMatch[1]!);
+        return json(await this.uploadArtifact(request, identity, taskListMatch[1]!), 201);
+      }
+      const taskFileMatch = path.match(/^\/api\/workbench\/tasks\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/artifacts\/(inputs|outputs|tmp)\/(.+)$/);
+      if (taskFileMatch && request.method === 'GET') {
+        this.assertTaskAccess(identity, taskFileMatch[1]!);
+        const filename = decodeURIComponent(taskFileMatch[3]!);
+        const result = await this.artifacts.read(await this.getTaskWorkspacePath(identity, taskFileMatch[1]!), taskFileMatch[1]!, taskFileMatch[2]! as TaskArtifactArea, filename);
+        if (!result) return json({ error: 'Artifact not found' }, 404);
+        return new Response(result.bytes, {
+          headers: {
+            'cache-control': 'private, no-store',
+            'content-type': result.artifact.mimeType,
+            'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(result.artifact.filename)}`,
+          },
+        });
+      }
       if (identity.role !== 'admin') return json({ error: 'Administrator role required' }, 403);
 
       if (request.method === 'GET' && path === '/api/workbench/departments') return json(this.directory.listDepartments());
@@ -330,16 +365,51 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
     };
   }
 
+  private newTaskId(identity: TeamIdentity): string {
+    return `web-${identity.userId}-${Date.now()}-${randomBytes(4).toString('hex')}`;
+  }
+
+  private assertTaskAccess(identity: TeamIdentity, taskId: string): void {
+    if (identity.role !== 'admin' && !taskId.startsWith(`web-${identity.userId}-`)) throw new ForbiddenError('You are not allowed to access this task');
+  }
+
+  private async getTaskWorkspacePath(identity: TeamIdentity, taskId: string): Promise<string> {
+    if (identity.role !== 'admin') return this.getWorkspacePath(identity);
+    const owner = this.directory.listUsers().find((user) => taskId.startsWith(`web-${user.id}-`));
+    if (!owner) throw new ForbiddenError('Task owner was not found');
+    return this.getWorkspacePath(asIdentity(owner));
+  }
+
+  private async uploadArtifact(request: Request, identity: TeamIdentity, taskId: string) {
+    const form = await request.formData();
+    const file = form.get('file');
+    if (!(file instanceof File)) throw new Error('multipart field "file" is required');
+    if (file.size <= 0) throw new Error('Uploaded file is empty');
+    if (file.size > this.maxUploadBytes) throw new Error(`Uploaded file exceeds ${this.maxUploadBytes} byte limit`);
+    const areaValue = form.get('area');
+    const area: TaskArtifactArea = areaValue === 'tmp' ? 'tmp' : 'inputs';
+    return {
+      artifact: await this.artifacts.put({
+        workspacePath: await this.getTaskWorkspacePath(identity, taskId), taskId, area,
+        filename: file.name, mimeType: file.type || 'application/octet-stream',
+        bytes: new Uint8Array(await file.arrayBuffer()),
+      }),
+    };
+  }
+
   private async invokeWithSource(identity: TeamIdentity, input: unknown, source: 'user' | 'admin_test') {
     const body = requireObject(input);
     const agentId = requireString(body.agentId, 'agentId');
+    const requestedTaskId = body.taskId === undefined ? undefined : requireString(body.taskId, 'taskId');
+    const taskId = requestedTaskId ?? this.newTaskId(identity);
+    this.assertTaskAccess(identity, taskId);
     const config = await this.plane.getConfig();
     const agent = config.agents.find((entry) => entry.id === agentId && entry.enabled !== false);
     if (!agent) throw new Error('Unknown agent');
     if (!this.canUseAgent(identity, agent)) throw new ForbiddenError('You are not allowed to use this Agent');
     const context: ToolContext = {
       sessionId: `web-${identity.userId}-${Date.now()}`,
-      taskId: `web-${identity.userId}-${Date.now()}`,
+      taskId,
       // Keep Agent inputs/outputs inside the same server-side Craft Workspace
       // that the browser account is assigned to. This makes generated files
       // appear in that workspace instead of a global workbench directory.
@@ -354,7 +424,7 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
     });
     const result = await registry.invoke(agent.id, context, asJsonObject(body.input));
     const mapped = result.raw === undefined ? null : mapAgentResult(result.raw);
-    return { summary: result.summary, artifacts: [...new Set([...(result.artifacts ?? []), ...(mapped?.artifacts ?? [])])], mapped };
+    return { taskId, summary: result.summary, artifacts: [...new Set([...(result.artifacts ?? []), ...(mapped?.artifacts ?? [])])], mapped };
   }
 
   private async updateAgent(agentId: string, input: unknown) {
@@ -479,12 +549,13 @@ export async function createTeamWorkbenchRuntime(options: TeamWorkbenchOptions):
   const vault = await EncryptedFileSecretVault.open(options.secretStorePath ?? join(controlDir, 'secrets.enc.json'), options.masterKey);
   const usage = new JsonlUsageLedger(options.usagePath ?? join(controlDir, 'usage.jsonl'));
   const caseMemory = new JsonlCaseMemory(options.caseMemoryPath ?? join(controlDir, 'case-memory.jsonl'));
+  const artifacts = options.artifactStore ?? new LocalTaskArtifactStore();
   const plane = new AgentControlPlane(
     new FileManifestStore(options.manifestsPath ?? join(controlDir, 'agents.json')),
     vault,
     usage,
   );
-  const httpApi = new TeamWorkbenchApi(directory, plane, vault, usage, caseMemory, options.workspaceRootPath);
+  const httpApi = new TeamWorkbenchApi(directory, plane, vault, usage, caseMemory, options.workspaceRootPath, artifacts, options.maxUploadBytes ?? DEFAULT_UPLOAD_LIMIT);
   return {
     authProvider: new DirectoryAuthProvider(directory, options.sessionSecret),
     httpApi,

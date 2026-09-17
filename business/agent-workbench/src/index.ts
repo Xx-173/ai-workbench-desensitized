@@ -11,6 +11,7 @@ export * from './capability-registry.ts';
 export * from './capabilities.ts';
 export * from './video-chapters.ts';
 export * from './task-workspace.ts';
+export * from './task-artifacts.ts';
 export * from './account-revocation.ts';
 export * from './business-events.ts';
 export * from './remote.ts';

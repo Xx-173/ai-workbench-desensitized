@@ -88,6 +88,7 @@ export default function AgentWorkbenchPage() {
   const [tab, setTab] = useState<Tab>('run')
   const [selectedAgentId, setSelectedAgentId] = useState('')
   const [formValues, setFormValues] = useState<Record<string, string>>({})
+  const [selectedFiles, setSelectedFiles] = useState<Record<string, File | undefined>>({})
   const [result, setResult] = useState<unknown>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -117,19 +118,39 @@ export default function AgentWorkbenchPage() {
   }
 
   useEffect(() => { void load() }, [])
-  useEffect(() => { setFormValues(initialFormValues(selectedAgent)) }, [selectedAgentId])
+  useEffect(() => { setFormValues(initialFormValues(selectedAgent)); setSelectedFiles({}) }, [selectedAgentId])
+
+  const isFileField = (name: string, field: AgentField) => /file|video|audio|image|document|文件|视频|音频|图片/i.test(`${name} ${field.description}`)
+
+  const uploadTaskFiles = async (taskId: string): Promise<Record<string, string>> => {
+    const uploaded: Record<string, string> = {}
+    for (const [fieldName, file] of Object.entries(selectedFiles)) {
+      if (!file) continue
+      const form = new FormData()
+      form.set('file', file)
+      form.set('area', 'inputs')
+      const response = await fetch(`/api/workbench/tasks/${encodeURIComponent(taskId)}/artifacts`, { method: 'POST', body: form, credentials: 'same-origin' })
+      const payload = await response.json().catch(() => ({})) as { artifact?: { relativePath?: string }; error?: string }
+      if (!response.ok || !payload.artifact?.relativePath) throw new Error(payload.error ?? `上传 ${file.name} 失败`)
+      uploaded[fieldName] = payload.artifact.relativePath
+    }
+    return uploaded
+  }
 
   const runAgent = async () => {
     if (!selectedAgentId) return
     if (!selectedAgent) return
-    const missingRequired = (selectedAgent.inputSchema.required ?? []).find((name) => !formValues[name]?.trim())
+    const missingRequired = (selectedAgent.inputSchema.required ?? []).find((name) => !formValues[name]?.trim() && !selectedFiles[name])
     if (missingRequired) {
       setError(`请填写：${fieldLabel(missingRequired, selectedAgent.inputSchema.properties[missingRequired] ?? { type: 'string', description: missingRequired })}`)
       return
     }
     setBusy(true); setError(''); setResult(null)
     try {
-      setResult(await api('/api/workbench/invoke', { method: 'POST', body: JSON.stringify({ agentId: selectedAgentId, input: toAgentInput(selectedAgent, formValues) }) }))
+      const task = await api<{ taskId: string }>('/api/workbench/tasks', { method: 'POST', body: '{}' })
+      const uploaded = await uploadTaskFiles(task.taskId)
+      const inputValues = { ...formValues, ...uploaded }
+      setResult(await api('/api/workbench/invoke', { method: 'POST', body: JSON.stringify({ taskId: task.taskId, agentId: selectedAgentId, input: toAgentInput(selectedAgent, inputValues) }) }))
       await load()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
@@ -289,8 +310,8 @@ export default function AgentWorkbenchPage() {
 
       {tab === 'run' && <section className="grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
         <aside className="space-y-2">{data.agents.length === 0 ? <p className="rounded-lg border p-4 text-sm text-muted-foreground">管理员尚未配置可用 Agent。</p> : data.agents.map((agent) => <button key={agent.id} onClick={() => setSelectedAgentId(agent.id)} className={`w-full rounded-lg border p-3 text-left ${selectedAgentId === agent.id ? 'border-foreground bg-muted/60' : 'hover:bg-muted/40'} ${agent.enabled === false ? 'opacity-60' : ''}`}><div className="flex justify-between gap-2"><strong className="text-sm">{agentName(agent)}</strong><span className="text-xs text-muted-foreground">{agent.enabled === false ? '已禁用' : agent.kind}</span></div><p className="mt-1 text-xs text-muted-foreground">{agent.description}</p><p className={`mt-2 text-xs ${agent.enabled === false ? 'text-muted-foreground' : agent.health.status === 'configured' ? 'text-emerald-600' : 'text-amber-600'}`}>{agent.enabled === false ? '管理员已禁用' : agent.health.status === 'configured' ? '可运行' : `等待管理员配置：${agent.health.missingReferences.join('、')}`}</p></button>)}</aside>
-        <div className="space-y-4"><section className="rounded-xl border bg-card p-4"><h2 className="font-medium">{selectedAgent?.description ?? '选择一个 Agent'}</h2><p className="mt-1 text-xs text-muted-foreground">已发布的业务 Agent 会使用管理员配置的服务和密钥；成员只需提交业务输入。</p><div className="mt-4 grid gap-3 sm:grid-cols-2">{Object.entries(selectedAgent?.inputSchema.properties ?? {}).map(([name, field]) => <label key={name} className="block text-sm font-medium"><span>{fieldLabel(name, field)}{selectedAgent?.inputSchema.required?.includes(name) ? <span className="ml-1 text-destructive">*</span> : null}</span>{field.type === 'boolean' ? <select value={formValues[name] ?? 'false'} onChange={(event) => setFormValues((current) => ({ ...current, [name]: event.target.value }))} className="mt-1.5 w-full rounded-md border bg-background px-3 py-2 text-sm"><option value="false">否</option><option value="true">是</option></select> : field.enum?.length ? <select value={formValues[name] ?? ''} onChange={(event) => setFormValues((current) => ({ ...current, [name]: event.target.value }))} className="mt-1.5 w-full rounded-md border bg-background px-3 py-2 text-sm"><option value="">请选择</option>{field.enum.map((option) => <option key={option} value={option}>{option}</option>)}</select> : <textarea value={formValues[name] ?? ''} onChange={(event) => setFormValues((current) => ({ ...current, [name]: event.target.value }))} placeholder={field.type === 'array' || field.type === 'object' ? '请输入结构化内容' : `请输入${fieldLabel(name, field)}`} className="mt-1.5 min-h-20 w-full rounded-md border bg-background p-3 text-sm outline-none focus:ring-2 focus:ring-ring" />}</label>)}</div>{selectedAgent && selectedAgent.enabled === false && <p className="mt-4 rounded-md bg-muted p-3 text-sm text-muted-foreground">此 Agent 已被管理员禁用。</p>}{selectedAgent && selectedAgent.enabled !== false && selectedAgent.health.status !== 'configured' && <p className="mt-4 rounded-md bg-amber-500/10 p-3 text-sm text-amber-700">此 Agent 尚未可用：管理员还需配置 {selectedAgent.health.missingReferences.join('、')}。</p>}<button disabled={!selectedAgent || selectedAgent.enabled === false || busy || selectedAgent.health.status !== 'configured'} onClick={() => void runAgent()} className="mt-4 inline-flex items-center gap-2 rounded-md bg-foreground px-3 py-2 text-sm font-medium text-background disabled:opacity-50"><Play className="h-4 w-4" />{busy ? '执行中…' : '提交任务并记录用量'}</button></section>
-        {result !== null && <section className="rounded-xl border bg-card p-4"><h2 className="font-medium">映射后的执行结果</h2><pre className="mt-3 max-h-[440px] overflow-auto rounded-md bg-muted p-3 text-xs leading-5">{String(JSON.stringify(result, null, 2) ?? '')}</pre></section>}</div>
+        <div className="space-y-4"><section className="rounded-xl border bg-card p-4"><h2 className="font-medium">{selectedAgent?.description ?? '选择一个 Agent'}</h2><p className="mt-1 text-xs text-muted-foreground">已发布的业务 Agent 会使用管理员配置的服务和密钥；成员只需提交业务输入。文件会自动保存到当前 Workspace 的任务目录。</p><div className="mt-4 grid gap-3 sm:grid-cols-2">{Object.entries(selectedAgent?.inputSchema.properties ?? {}).map(([name, field]) => <label key={name} className="block text-sm font-medium"><span>{fieldLabel(name, field)}{selectedAgent?.inputSchema.required?.includes(name) ? <span className="ml-1 text-destructive">*</span> : null}</span>{isFileField(name, field) ? <><input type="file" onChange={(event) => setSelectedFiles((current) => ({ ...current, [name]: event.target.files?.[0] }))} className="mt-1.5 block w-full rounded-md border bg-background px-3 py-2 text-sm" />{selectedFiles[name] ? <span className="mt-1 block text-xs text-muted-foreground">已选择：{selectedFiles[name]!.name}</span> : null}</> : field.type === 'boolean' ? <select value={formValues[name] ?? 'false'} onChange={(event) => setFormValues((current) => ({ ...current, [name]: event.target.value }))} className="mt-1.5 w-full rounded-md border bg-background px-3 py-2 text-sm"><option value="false">否</option><option value="true">是</option></select> : field.enum?.length ? <select value={formValues[name] ?? ''} onChange={(event) => setFormValues((current) => ({ ...current, [name]: event.target.value }))} className="mt-1.5 w-full rounded-md border bg-background px-3 py-2 text-sm"><option value="">请选择</option>{field.enum.map((option) => <option key={option} value={option}>{option}</option>)}</select> : <textarea value={formValues[name] ?? ''} onChange={(event) => setFormValues((current) => ({ ...current, [name]: event.target.value }))} placeholder={field.type === 'array' || field.type === 'object' ? '请输入结构化内容' : `请输入${fieldLabel(name, field)}`} className="mt-1.5 min-h-20 w-full rounded-md border bg-background p-3 text-sm outline-none focus:ring-2 focus:ring-ring" />}</label>)}</div>{selectedAgent && selectedAgent.enabled === false && <p className="mt-4 rounded-md bg-muted p-3 text-sm text-muted-foreground">此 Agent 已被管理员禁用。</p>}{selectedAgent && selectedAgent.enabled !== false && selectedAgent.health.status !== 'configured' && <p className="mt-4 rounded-md bg-amber-500/10 p-3 text-sm text-amber-700">此 Agent 尚未可用：管理员还需配置 {selectedAgent.health.missingReferences.join('、')}。</p>}<button disabled={!selectedAgent || selectedAgent.enabled === false || busy || selectedAgent.health.status !== 'configured'} onClick={() => void runAgent()} className="mt-4 inline-flex items-center gap-2 rounded-md bg-foreground px-3 py-2 text-sm font-medium text-background disabled:opacity-50"><Play className="h-4 w-4" />{busy ? '执行中…' : '提交任务并记录用量'}</button></section>
+        {result !== null && <section className="rounded-xl border bg-card p-4"><h2 className="font-medium">映射后的执行结果</h2>{(() => { const value = result as { taskId?: string; artifacts?: string[] }; return value.taskId && value.artifacts?.length ? <div className="mt-3 space-y-1 text-sm"><p className="text-xs text-muted-foreground">任务产物已保存到当前 Workspace：</p>{value.artifacts.filter((path) => !/^https?:\/\//i.test(path)).map((path) => <a key={path} href={`/api/workbench/tasks/${encodeURIComponent(value.taskId!)}/artifacts/${path.split('/').map((part) => encodeURIComponent(part)).join('/')}`} download className="block text-primary underline">下载 {path}</a>)}</div> : null })()}<pre className="mt-3 max-h-[440px] overflow-auto rounded-md bg-muted p-3 text-xs leading-5">{String(JSON.stringify(result, null, 2) ?? '')}</pre></section>}</div>
       </section>}
 
       {tab === 'usage' && <section className="space-y-5"><div><h2 className="font-medium">我的用量</h2><p className="mt-1 text-sm text-muted-foreground">只展示你自己的调用聚合；不会存储任务正文、输出内容或任何密钥。Token 仅在下游服务实际返回 usage 时统计。</p></div><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{usageCards(data.ownUsage).map(([label, value]) => <div key={String(label)} className="rounded-xl border bg-card p-4"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 text-2xl font-semibold">{value}</p></div>)}</div><section className="rounded-xl border bg-card p-4"><h2 className="font-medium">按 Agent</h2><UsageRows rows={data.ownUsage.byAgent} empty="尚无个人调用记录。" /></section></section>}

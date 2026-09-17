@@ -31,6 +31,18 @@ test('team workbench authorizes only provisioned users and exposes department-sa
     assert.equal(payload.identity.role, 'admin');
     assert.equal(payload.departments.length, 1);
     assert.equal(payload.users.some((user) => Object.hasOwn(user, 'passwordHash')), false);
+
+    const taskResponse = await runtime.httpApi.fetch(new Request('http://local/api/workbench/tasks', { method: 'POST' }), signedIn.identity);
+    assert.equal(taskResponse?.status, 201);
+    const task = await taskResponse?.json() as { taskId: string };
+    const form = new FormData();
+    form.set('file', new File([Buffer.from('video-bytes')], 'lesson.mp4', { type: 'video/mp4' }));
+    const uploadResponse = await runtime.httpApi.fetch(new Request(`http://local/api/workbench/tasks/${task.taskId}/artifacts`, { method: 'POST', body: form }), signedIn.identity);
+    assert.equal(uploadResponse?.status, 201);
+    const uploaded = await uploadResponse?.json() as { artifact: { relativePath: string } };
+    assert.equal(uploaded.artifact.relativePath, 'inputs/lesson.mp4');
+    const artifactResponse = await runtime.httpApi.fetch(new Request(`http://local/api/workbench/tasks/${task.taskId}/artifacts`), signedIn.identity);
+    assert.deepEqual((await artifactResponse?.json() as { artifacts: Array<{ relativePath: string }> }).artifacts.map((item) => item.relativePath), ['inputs/lesson.mp4']);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

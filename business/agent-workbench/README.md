@@ -11,7 +11,7 @@
 | 结构化 Session 上下文、凭据管理接口、Agent 事件契约 | Craft 底座 |
 | Agent Manifest、输入校验、HTTP / Python / MCP 执行适配 | 本业务层新增 |
 | 按 Agent 显式引用凭据、受限子进程环境、用量 JSONL 账本 | 本业务层新增 |
-| 任务产物隔离、章节聚合规则回退、访问撤销、结果映射 | 本业务层新增 |
+| 任务产物隔离、网页上传/下载、章节聚合规则回退、访问撤销、结果映射 | 本业务层新增 |
 | Trace/Benchmark、无原文 Case Memory、外部 Agent 沙箱验证流程 | 本业务层新增 |
 | 工作台导航、WebUI 团队认证和受控 HTTP API 挂载 | 本项目对 Craft WebUI / Server 的最小接线修改 |
 
@@ -46,6 +46,8 @@
 启用 `CRAFT_TEAM_MODE=true` 后，Craft WebUI 登录改为管理员开通的“用户名 + 密码”。账号密码使用 scrypt 加盐哈希，浏览器使用 HttpOnly / SameSite 会话 Cookie；每次 HTTP 请求和新的 WebSocket 握手都会校验账号仍处于启用状态。浏览器仍加载 Craft 原生对话、会话与 Workspace；管理员可在左侧“AI 工作台”内维护部门、创建/禁用人员账号、查看部门/个人/Agent 聚合用量，并安全配置 Agent；普通成员只显示获授权 Agent 和自己的用量。管理员还能测试、启用/禁用和删除已发布 Agent；测试调用默认标记为 `admin_test`，可在团队用量 API 通过 `includeTests=true` 审计。
 
 团队目录默认是单 Craft Server 实例的受限权限 JSON 文件，方便本地/单机演示。生产多实例部署应以实现相同接口的 PostgreSQL / 企业 SSO 替换，并经由 HTTPS/WSS 反向代理提供浏览器访问。
+
+成员通过 `/api/workbench/tasks` 创建任务，再以 `multipart/form-data` 上传输入文件到 `/api/workbench/tasks/:taskId/artifacts`。文件会落在当前成员 Workspace 的 `tasks/:taskId/inputs`；结果通过同一任务的 `outputs` 返回。当前默认是 `LocalTaskArtifactStore`，生产环境应替换为 OSS/S3/MinIO，并由 Redis Worker 执行大文件任务。
 
 ## 本地 Control Center
 
