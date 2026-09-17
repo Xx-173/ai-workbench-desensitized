@@ -77,6 +77,8 @@ export interface WorkbenchHttpApi {
 
 export interface TeamWorkspaceControl {
   setWorkspaceResolver(resolver: (identity: TeamIdentity) => Promise<string>): void;
+  /** Resolve the server-side filesystem root for the member's Craft workspace. */
+  setWorkspacePathResolver(resolver: (identity: TeamIdentity) => Promise<string>): void;
   canAccessWorkspace(identity: TeamIdentity, workspaceId: string | null | undefined): Promise<boolean>;
 }
 
@@ -228,6 +230,7 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
   private readonly caseMemory: JsonlCaseMemory;
   private readonly workspaceRootPath: string;
   private workspaceResolver: ((identity: TeamIdentity) => Promise<string>) | null = null;
+  private workspacePathResolver: ((identity: TeamIdentity) => Promise<string>) | null = null;
 
   constructor(
     directory: TeamDirectory,
@@ -247,6 +250,14 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
 
   setWorkspaceResolver(resolver: (identity: TeamIdentity) => Promise<string>): void {
     this.workspaceResolver = resolver;
+  }
+
+  setWorkspacePathResolver(resolver: (identity: TeamIdentity) => Promise<string>): void {
+    this.workspacePathResolver = resolver;
+  }
+
+  private async getWorkspacePath(identity: TeamIdentity): Promise<string> {
+    return this.workspacePathResolver ? this.workspacePathResolver(identity) : this.workspaceRootPath;
   }
 
   async getDefaultWorkspaceId(identity: TeamIdentity): Promise<string | null> {
@@ -329,7 +340,10 @@ class TeamWorkbenchApi implements WorkbenchHttpApi, TeamWorkspaceControl {
     const context: ToolContext = {
       sessionId: `web-${identity.userId}-${Date.now()}`,
       taskId: `web-${identity.userId}-${Date.now()}`,
-      workspacePath: this.workspaceRootPath,
+      // Keep Agent inputs/outputs inside the same server-side Craft Workspace
+      // that the browser account is assigned to. This makes generated files
+      // appear in that workspace instead of a global workbench directory.
+      workspacePath: await this.getWorkspacePath(identity),
       credentials: this.vault,
       actor: { userId: identity.userId, departmentId: identity.departmentId },
       usageSource: source,

@@ -157,14 +157,18 @@ if (teamMode) {
   // each account receives one server-owned workspace on first login. The
   // immutable directory/user IDs make the on-disk path deterministic and do
   // not expose user-provided names to filesystem paths.
+  const resolveTeamWorkspacePath = async (identity: {
+    userId: string; departmentId: string; displayName: string;
+  }) => join(teamWorkspaceRoot, 'craft-workspaces', identity.departmentId, identity.userId)
   teamWorkbench.workspaceControl.setWorkspaceResolver(async (identity: {
     userId: string; departmentId: string; displayName: string;
   }) => {
-    const rootPath = join(teamWorkspaceRoot, 'craft-workspaces', identity.departmentId, identity.userId)
+    const rootPath = await resolveTeamWorkspacePath(identity)
     const existing = getWorkspaces().find((workspace) => workspace.rootPath === rootPath)
     if (existing) return existing.id
     return addWorkspace({ name: `智能工作台 · ${identity.displayName}`, rootPath }).id
   })
+  teamWorkbench.workspaceControl.setWorkspacePathResolver(resolveTeamWorkspacePath)
   console.log('[team] Administrator-issued accounts and department usage are enabled.')
 }
 
