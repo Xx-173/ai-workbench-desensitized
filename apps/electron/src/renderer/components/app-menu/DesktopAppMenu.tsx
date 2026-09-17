@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import * as Icons from "lucide-react"
-import { isMac } from "@/lib/platform"
+import { isMac, isOrganizationWebUI } from "@/lib/platform"
 import { useActionLabel } from "@/actions"
 import {
   DropdownMenu,
@@ -164,6 +164,16 @@ export function DesktopAppMenu({
     toggleSidebar: onToggleSidebar,
   }
 
+  const handleQuit = () => {
+    if (isOrganizationWebUI) {
+      void fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).finally(() => {
+        window.location.href = '/login'
+      })
+      return
+    }
+    window.electronAPI.menuQuit()
+  }
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -251,7 +261,7 @@ export function DesktopAppMenu({
 
         <StyledDropdownMenuSeparator />
 
-        <StyledDropdownMenuItem onClick={() => window.electronAPI.menuQuit()}>
+        <StyledDropdownMenuItem onClick={handleQuit}>
           <Icons.LogOut className="h-3.5 w-3.5" />
           {t(ROOT_MENU.quit.labelKey)}
           {quitHotkey && <DropdownMenuShortcut className="pl-6">{quitHotkey}</DropdownMenuShortcut>}

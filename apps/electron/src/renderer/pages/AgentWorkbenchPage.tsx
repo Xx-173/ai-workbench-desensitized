@@ -1,7 +1,7 @@
 /** Native Craft panel for the authenticated multi-Agent workbench. */
 
 import { useEffect, useMemo, useState } from 'react'
-import { Bot, Building2, ChevronDown, KeyRound, Play, Plus, RefreshCw, ShieldCheck, Users } from 'lucide-react'
+import { Bot, Building2, ChevronDown, KeyRound, LogOut, Play, Plus, RefreshCw, ShieldCheck, Users } from 'lucide-react'
 
 type Identity = { userId: string; username: string; displayName: string; departmentId: string; role: 'admin' | 'member' }
 type AgentField = { type: string; description: string; enum?: string[] }
@@ -239,7 +239,7 @@ export default function AgentWorkbenchPage() {
     <div className="h-full overflow-auto bg-background p-5 @container">
       <header className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div><div className="flex items-center gap-2"><Bot className="h-5 w-5" /><h1 className="text-lg font-semibold">AI 工作台</h1></div><p className="mt-1 text-sm text-muted-foreground">在 Craft 内运行已审批 Agent；密钥不下发给成员，调用按账号和部门归集。</p></div>
-        <div className="flex items-center gap-2 text-sm text-muted-foreground"><span>{data.identity.displayName} · {data.identity.role === 'admin' ? '管理员' : '成员'}</span><button className="rounded-md border p-2" title="刷新" onClick={() => void load()}><RefreshCw className="h-4 w-4" /></button></div>
+        <div className="flex items-center gap-2 text-sm text-muted-foreground"><span>{data.identity.displayName} · {data.identity.role === 'admin' ? '管理员' : '成员'}</span><button className="rounded-md border p-2" title="刷新" onClick={() => void load()}><RefreshCw className="h-4 w-4" /></button><button className="inline-flex items-center gap-1 rounded-md border px-2 py-1.5 text-xs" title="退出账号" onClick={() => { void fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).finally(() => { window.location.href = '/login' }) }}><LogOut className="h-3.5 w-3.5" />退出账号</button></div>
       </header>
       <div className="mb-5 flex gap-2 border-b pb-3">
         <button onClick={() => setTab('run')} className={`rounded-md px-3 py-1.5 text-sm ${tab === 'run' ? 'bg-foreground text-background' : 'hover:bg-muted'}`}><Play className="mr-1 inline h-3.5 w-3.5" />运行 Agent</button>
