@@ -110,7 +110,11 @@ interface UserRow extends QueryResultRow {
 }
 
 export class PostgresTeamDirectory implements TeamDirectoryPort {
-  constructor(private readonly pool: Pool) {}
+  private readonly pool: Pool;
+
+  constructor(pool: Pool) {
+    this.pool = pool;
+  }
 
   static async open(pool: Pool, bootstrap?: { adminUsername: string; adminDisplayName?: string; adminPassword: string; departmentName?: string }): Promise<PostgresTeamDirectory> {
     const directory = new PostgresTeamDirectory(pool);
@@ -193,7 +197,11 @@ export class PostgresTeamDirectory implements TeamDirectoryPort {
 }
 
 export class PostgresManifestStore implements ManifestStore {
-  constructor(private readonly pool: Pool) {}
+  private readonly pool: Pool;
+
+  constructor(pool: Pool) {
+    this.pool = pool;
+  }
 
   async read(): Promise<AgentWorkbenchConfig> {
     const result = await this.pool.query<{ manifest: unknown; enabled: boolean }>('SELECT manifest, enabled FROM agents ORDER BY id');
@@ -236,7 +244,11 @@ function eventFromRow(row: QueryResultRow): AgentUsageEvent {
 }
 
 export class PostgresUsageLedger implements UsageLedger {
-  constructor(private readonly pool: Pool) {}
+  private readonly pool: Pool;
+
+  constructor(pool: Pool) {
+    this.pool = pool;
+  }
 
   async record(event: AgentUsageEvent): Promise<void> {
     await this.pool.query(
@@ -259,7 +271,11 @@ export class PostgresUsageLedger implements UsageLedger {
 }
 
 export class PostgresCaseMemory implements CaseMemoryRecorder {
-  constructor(private readonly pool: Pool) {}
+  private readonly pool: Pool;
+
+  constructor(pool: Pool) {
+    this.pool = pool;
+  }
 
   async record(entry: AgentCaseMemoryEntry): Promise<void> {
     await this.pool.query(
